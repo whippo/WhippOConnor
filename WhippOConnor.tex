@@ -252,10 +252,9 @@
 \newfloat{Program}{htbp}{lop}[chapter]
 
 % Here is the start of the document.
-\usepackage{Sweave}
 \begin{document}
 % Include sweave code in the thesis
-\input{WhippOConnor-concordance}
+\SweaveOpts{concordance=TRUE}
 %% This starts numbering in Roman numerals as required for the thesis
 %% style and is mandatory.
 \frontmatter
@@ -299,3 +298,3429 @@ For my grandfather, Harold Eugene Whippo.
 % Any other unusual prefactory material should come here before the
 % main body.
 
+<<label = rglobal, echo = FALSE>>=
+
+#sets global working directory, loads all necessary packages, and creates 
+#functions needed for analyses
+
+library(nlme)
+library(gplots)
+library(ggplot2)
+library(sciplot)
+library(lattice)
+library(vegan)
+library(xtable)
+library(gridExtra)
+library(BiodiversityR)
+library(multcomp)
+
+#calculates standard error
+sterror <- function(x, na.rm = FALSE) {
+  sd <- sd(x, na.rm = TRUE)
+  len <- length(x[!is.na(x)]) 
+  se <- sd/sqrt(len)
+  print(se)
+}
+
+#calculates Simpson's evenness measure
+even <- function(x) {
+  y <- x
+  y[y > 0] <- 1
+  z <- rowSums(y)
+  divx <- diversity(x, index = "invsimpson")
+  q <- divx/z
+}
+
+#funtion that calculated Marginal (fixed effect) and Conditional (fixed and random
+#effects) r-squared value, and AIC.
+rsquared.glmm=function(modlist) {
+  # Iterate over each model in the list
+  do.call(rbind,lapply(modlist,function(i) {
+    # For models fit using lm
+    if(class(i)=="lm") {
+      Rsquared.mat=data.frame(Class=class(i),Family="Gaussian",
+                              Marginal=summary(i)$r.squared,
+                              Conditional=NA,AIC=AIC(i)) }
+  
+    # For model fit using nlme
+    else if(class(i)=="lme") {
+      # Get design matrix of fixed effects from model
+      Fmat=model.matrix(eval(i$call$fixed)[-2],i$data)
+      # Get variance of fixed effects by multiplying coefficients by design matrix
+      VarF=var(as.vector(fixef(i) %*% t(Fmat)))
+      # Get variance of random effects by extracting variance components
+      VarRand=sum(suppressWarnings(as.numeric(VarCorr(i)
+                                              [rownames(VarCorr(i))!="Residual",1])),na.rm=T)
+      # Get residual variance
+      VarResid=as.numeric(VarCorr(i)[rownames(VarCorr(i))=="Residual",1])
+      # Calculate marginal R-squared (fixed effects/total variance)
+      Rm=VarF/(VarF+VarRand+VarResid)
+      # Calculate conditional R-squared (fixed effects+random effects/total variance)
+      Rc=(VarF+VarRand)/(VarF+VarRand+VarResid)
+      # Bind R^2s into a matrix and return with AIC values
+      Rsquared.mat=data.frame(Class=class(i),Marginal=Rm,Conditional=Rc,
+                              AIC=AIC(update(i,method="ML")))
+    } else { print("Function requires models of class lm, lme, mer, or merMod")
+    } } ) ) }
+
+#modified rankabunplot function with larger cex for species names:
+
+rankplot <- function (xr, addit = F, labels = "", scale = "abundance", scaledx = F, 
+          type = "o", xlim = c(min(xpos), max(xpos)), ylim = c(0, max(x[, 
+                                                                        scale])), specnames = c(1:5), ...) 
+{
+  x <- xr
+  xpos <- 1:nrow(x)
+  if (scaledx == T) {
+    xpos <- xpos/nrow(x) * 100
+  }
+  if (scale == "accumfreq") {
+    type <- "o"
+  }
+  if (addit == F) {
+    if (scale == "logabun") {
+      plot(xpos, x[, "abundance"], xlab = "species rank", 
+           ylab = "abundance", type = type, bty = "l", log = "y", 
+           xlim = xlim, ...)
+    }
+    else {
+      plot(xpos, x[, scale], xlab = "species rank", ylab = scale, 
+           type = type, bty = "l", ylim = ylim, xlim = xlim, 
+           ...)
+    }
+  }
+  else {
+    if (scale == "logabun") {
+      points(xpos, x[, "abundance"], type = type, ...)
+    }
+    else {
+      points(xpos, x[, scale], type = type, ...)
+    }
+  }
+  if (length(specnames) > 0) {
+    for (i in specnames) {
+      if (scale == "logabun") {
+        text(i + 0.5, x[i, "abundance"], rownames(x)[i], 
+             pos = 4, cex = 1.5)
+      }
+      else {
+        text(i + 0.5, x[i, scale], rownames(x)[i], pos = 4, cex = 1.5)
+      }
+    }
+  }
+  if (labels != "") {
+    if (scale == "logabun") {
+      text(1, x[1, "abundance"], labels = labels, pos = 2)
+    }
+    else {
+      text(1, x[1, scale], labels = labels, pos = 2)
+    }
+  }
+}
+
+@
+
+% Now regular page numbering begins.
+\mainmatter
+
+% Parts are the largest structural units, but are optional.
+%\part{Thesis}
+
+% Chapters are the next main unit.
+\chapter{Introduction}
+%
+How biological communities assemble and persist remain fundamental questions of ecology. These phenomena are driven by local processes such as predation, competition and facilitation (e.g., by foundation species), as well as regional processes of colonization, extinction and dispersal. Together these processes interact to influence the diversity and composition of local communities, but their relative importance can vary among ecosystems and abiotic conditions~\citep{Leibold:2004a}. The relative importance of local and regional processes determines the predominant spatial and temporal scales of community structuring, and therefore is critical to understanding the resultant communities we observe.
+
+Marine communities of foundation species and mobile marine animals are expected to exhibit a balance of local and regional control on species richness and diversity. For example, in a global analysis~\citet{Witman:2004} found that while up to 76\% of local diversity in subtidal invertebrate communities could be explained by the regional species pool overall, much of the variation that was observed at some sites was due to competitive dominance and predation. In addition,~\citet{Bruno:2002} observed an interaction between local facilitation and regional colonization in determining diversity of cobble beach communities. These patterns have also been seen in coral reef habitats where strong regional enrichment of the local species pool interacts with spatial heterogeneity and species coexistence mechanisms to produce the realized community~\citep{Karlson:2004}. The relative role of local and regional control of animal communities in seagrass habitats, however, has not been addressed directly in the field. Understanding the spatial scales at which critical processes operate within seagrass-associated communities is vital, especially in light of the global decline of seagrass species~\citep{Short:1996}.
+
+\section{Seagrass Meadow Communities}
+Seagrass meadows are highly productive ecosystems that support a broad diversity of taxa including invertebrates, fish, marine mammals, and birds~\citep{Hemminga:2000}. The invertebrate communities consist of primarily  sub-sediment infauna, mobile benthic organisms, and mobile and sessile epifauna. The epifaunal component of seagrass meadows include many taxa, but most commonly \emph{Crustacea} and \emph{Gastropoda}, and to a lesser extent various members of \emph{Echinodermata} and \emph{Polychaeta}, among others~\citep{Jaschinski:2008,Vonk:2010}. Epifaunal communities in seagrass are the main link between meadow primary production, and higher trophic levels~\citep{Best:2012}. This transfer is largely the result of grazing on epiphtyic algae which opportunistically grow on the seagrass blades~\citep{Cook:2011}. The control of these algae is affected by top-down forcing of the mesograzing epifauna, though bottom-up control is also seen to some extent~\citep{Douglass:2007}.
+
+Seagrass net community production including primary and secondary production is between 20 and 101 Tg C per year, globally, and nutrient cycling, including trophic transfer by epifauna, is a critical step in the cycling and sequestration of carbon~\citep{Hemminga:2000,Duffy:2006}. The ecosystem functions that epifauna facilitate in seagrass meadows support community processes that deliver vital ecosystem services to humans such as sediment stabilization and wave attenuation~\citep{Costanza:1997,Orth:2006}. Seagrass meadows also provide shelter  and feeding grounds for economically valuable taxa including rockfish and perch, invertebrates such as dungeness crab, and burrowing infauna including cockels and longneck clams~\citep{Baldwin:1994,Best:2012}. 
+
+Globally, seagrass is in decline due to multiple stressors including nutrient inputs~\citep{Orth:2006}, physical disturbance~\citep{Short:1996}, and invasive species~\citep{Malyshev:2011}. Understanding the variables that collectively determine seagrass community assembly and persistence is necessary to make informed management decisions~\citep{Cullen-Unsworth:2013}. While a wealth of ecological information has been drawn from seagrass ecology studies in the Mediterranean, the east coast of North America, and Australia, relatively few studies have focused on the community ecology of seagrass meadows in the Pacific Northwest. The majority of meadows in the Pacific Northwest are comprised of the seagrass \emph{Zostera marina}, a temperate seagrass that occurs as both as large, contiguous meadows, and as naturally fragmented patches in coastal regions. By understanding the scale at which biotic and abiotic forces structure diversity within and among communities, we will be better able to successfully manage these systems locally.
+
+\section{Structure \& Objectives}
+The goal of this thesis is to describe the composition and diversity of epifaunal mesograzers in Pacific Northwest seagrass meadows, and to identify patterns of diversity within and among meadows. This thesis consists of three chapters: an introduction, a data chapter, and a conclusions chapter. In Chapter 2 I quantified the community composition, richness, and diversity of epifaunal mesograzers, and tested the dispersal abilities of epifauna to answer the following questions: 1) Do seagrass epifauna exhibit patch-scale variability across multiple scales? 2) Can we identify patterns of diversity within and among meadows in the same region?  Chapter 3 concludes this thesis by placing my findings in the context of seagrass ecosystem function and contributes to our knowledge of marine community structure. Finally, I suggest future work and additional questions that this body of work could potentially inform, as well as implications for managment strategies best suited to conserve seagrass ecosystems. 
+
+\chapter{Quantifying the spatial scale of epifaunal diversity across seagrass meadows in Barkley Sound, BC}
+
+% Sections are a sub-unit
+\section{Introduction}
+%
+The assembly and persistence of ecological communities have historically been viewed as acting on a local scale (biotic interactions, fine-scale spatial structuring, etc.) or a regional scale (dispersal, landscape gradients, etc.), but the interaction of processes across these scales is now seen as fundamental to the resulting community composition~\citep{Leibold:2004a}. To understand patterns of local diversity, we must know regional patterns of diversity~\citep{Caley:1997}. Regional processes such as dispersal and abiotic filtering across a gradient, and local processes such as facilitation can interact to produce a realized community that could not be predicted by considering these scales separately~\citep{Witman:2004}. Therefore, it is important to consider how measures of community diversity can vary from the scale of a single patch, to multiple patches within a region, which may be unique in habitat structure and cross landscape gradients.
+
+By considering within and between patch variation we can better determine the scale at which local and regional community structuring processes are acting. The effect of these processes on realized communities can result in very different community outcomes depending on timing and spatial extent of the structuring force. 
+
+The role of scale in ecology has been tested primarily in terrestrial, fresh water, and pelagic habitats, with fewer studies describing the impact of processes across scales on near-shore marine communities~\citep{Cottenie:2005,Logue:2011}. However, the life history and dispersal dynamics of many marine macroinvertebrates can fundamentally differ from those of freshwater and pelagic organisms, suggesting different relationships between local and regional processes compared to other systems. For example, many near-shore marine organisms exhibit a mix of passive and active dispersal strategies. The combination of these strategies in a community would suggest different community assembly predictions than if considering only the passive dispersal observed in planktonic organisms, or the active dispersal observed in some aquatic insects. 
+
+In addition, temporal variability of invertebrate assemblages in marine systems has been previously underestimated~\citep{Balata:2006}. As such, the timing of dispersal may play a key role in community assembly. For instance, a planktonic larval stage may allow early colonization of a habitat by particular organisms, but later dispersal by adults of another species may allow colonization of habitat patches if the adults are competitively superior to the dominant larval taxa. Here, priority effects may be stronger or weaker in structuring a community depending on the phenology and life-history of the dispersing species.
+
+The presence of abiotic gradients in marine communities may also explain variation in community assembly across scales. Salinity and temperature have been shown to be strong structuring forces in the marine environment that can result in species sorting along a gradient~\citep{Barnes:2012,Fortes:2014,Leibold:2004a}. Additionally, diversity in marine habitats such as the rocky intertidal has been observed to be greater within locations than between locations~\citep{deJuan:2011}. But the role of regional gradients can alter predictions of community diversity and richness depending on whether those gradients are the primary structuring force, or interact with local conditions to make a habitat more or less suitable for colonizing organisms~\citep{Sanders:2007a,Witman:2008}.
+
+Seagrass meadows are spatially structured, globally distributed near-shore habitat. They are highly productive ecosystems that support a broad diversity of taxa, and are subject to various abiotic gradients and regimes across spatial and temporal scales~\citep{Bostrom:2006a,Heck:2003}. Much of the ecological knowledge tested in and applied to seagrass animal communities has been drawn from a narrow set of climate regimes and regions: up to 75\% of ecological seagrass studies have been restricted to between 30\degree~and 40\degree~latitude in Australia, the Mediterranean, and the Atlantic regions, representing only a small portion of global seagrass distribution~\citep{Bostrom:2006a,Duarte:1999}. Temperate seagrass meadows are subject to greater seasonal temperature fluctuations, tidal regimes, and strong seasonal drivers, such as limited sunlight and prolonged precipitation events, that could change the relative contribution of local and regional processes to structuring animal communities in seagrass meadows. 
+
+Seagrass is valuable habitat for many marine invertebrates and hosts a large number of epifaunal species that constitute a large proportion of secondary production~\citep{Hemminga:2000}. These epifaunal communities constitute the main trophic link between primary production and higher trophic levels in temperate seagrass~\citep{Hemminga:2000}. They consist of macroinvertebrates including many arthropods and molluscs that have varying dispersal capabilities. Many of the epifauna known to commonly inhabit temperate seagrass meadows have low active dispersal capability in larval and juvenille stages. For example, the zebra sea hare (\emph{Phyllaplysia taylori}), many amphipod species including caprellids (\emph{Amphipoda:Caprellidae}) and some gammarids (\emph{Amphipoda:Gammaridea}), and the seagrass isopod (\emph{Idotea resecata}) have crawl-away larvae and brooded offspring respectively that do not undergo a planktonic stage. Passive dispersal via rafting on macrophyte detritus and phoresy (non-parasitic dispersal by an animal vector) are the most likely dispersal modes for many of these taxa, though the relative strength of each mode is not known. 
+
+Variation in community response to the abiotic environment (i.e. salinity, temperature, etc.) within and among seagrass meadows even in a single region can be very large~\citep{Bostrom:2006a}. This suggests that current structure of the community might be based on abiotic filtering, and the outcome of community dynamics (persistence/coexistence or local extinction of species) modulated by local abiotic conditions within meadows. Some of these differences could be due to variable spatial complexity and permeability of the inter-meadow matrix. This could act as a community structuring process among meadows, resulting in effectively isolated communities in each patch. Alternatively, regional seagrass meadows could operate as a metacommunity, and the differences observed among communities could reflect asynchronous dynamics, stochastic extictions/colonizations, or interactions between local and regional processes. Components of the abiotic environment including temperature/salinity and meadow density and leaf area can also have direct effects on invertebrates, though these relationships can be taxon-specific~\citep{Richmond:1999,Bostrom:2000,Sirota:2006}. Indirect effects on epifauna driven by abiotic effects on primary production can also contribute to complexity in community assembly processes~\citep{Frankovich:2005,Jaschinski:2008}.
+
+Despite evidence of spatial structuring, abiotic variation among meadows, and moderate dispersal by epifauna, no study has explicitly tested the spatial scale of community structure in seagrass systems. Therefore, to understand the processes and scale that determine community assembly, we must quantify patterns of diversity within and among seagrass meadows to better formulate empirical tests that can reveal underlying processes structuring these communities. Here, I quantified the epifaunal diversity and composition of five seagrass meadows in Barkley Sound, British Columbia, to determine if seagrass epifaunal communities exhibit patch-scale variability across multiple scales. Additionally, I compared communities through space and time to identify patterns of diversity within and among meadows in the same region. If passive dispersers are not seen at all sites, or relative abundance of each species is not the same across sites, we might expect that either metapopulation dynamics are structuring the community, or post-colonization processes may be determining community assembly. If epifaunal seagrass communities are simply unstructured metapopulations of many taxa, they should be randomly distributed across all localities.  However, if we see partitioning of communities among meadows, then post-colonization processes are likely~\citep{Bostrom:2000}. To address these questions I tested the following hypotheses:
+
+\begin{enumerate}
+\item Epifaunal diversity and composition driven by abiotic factors (temperature, salinity) and meadow characteristics (meadow area, density) differs among seagrass meadows, and within seagrass meadows through time.
+\item Variation in community richness and diversity will be greater among meadows than within meadows.
+\item Post-settlement processes are more important than dispersal in structuring epifaunal communities.  
+\end{enumerate}
+            
+\section{Materials \& Methods}
+%Subsections follow
+\subsection{Study System \& Field Sites}
+
+   Barkley Sound, British Columbia, is a well-mixed marine ecosystem that supports many seagrass meadows with associated epifaunal communities. In the case of such a well mixed system it would be expected that epifaunal communities within a small region (10's of kilometers) would be very similar to one another due to frequent colonization events. Therefore, I conducted field surveys at five sites along Trevor Channel in Barkley Sound separated by a mean distance of 5.18 km, with a maximum distance of 17.74 km between furthest sites (Figure~\ref{fig:bammap}). Barkley Sound experiences mixed semi-diurnal tides and ranges in temperature from 7 \degree C to 20 \degree C with an average of 12 \degree C, and salinity ranges from 10 ppt to 30 ppt with an average of 23 ppt annually~\citep{Pawlowicz:2005:ONLINE}. The sites are oriented from Southwest to Northeast from the Pacific Ocean to Alberni Inlet as follows: Dodger Channel (DC, 48\degree 50.023'N, 125\degree 11.720'W), Wizard Island (WI, 48\degree 51.495'N, 125\degree 09.520'W), Robber's Passage (RP, 48\degree 53.648'N, 125\degree 07.104'W), Numukamis Bay (NB, 48\degree 54.391'N, 125\degree 00.740'W), and Crickitt Bay (CB, 48\degree 56.457'N, 125\degree 01.117'W). Trevor Channel is a very deep rocky fjord (+200m at its deepest point) and seagrass meadows are constrained to a fringing zone of fairly shallow photosynthetic depth limits of less than 10m, and bounded by rare suitable substrates, effectively isolating habitat patches from one another. The sites consisted of highly exposed locales, subject to wind waves and swell (WI and NB) and sites sheltered from wind and waves (DC, RP, CB). 
+
+
+\begin{figure}[H]
+\begin{center}
+\includegraphics[width = 5in]{Bammap.png}
+\end{center}
+\caption{Map of Trevor Channel in Barkley Sound, BC. Primary sampling sites are indicated by red circles; Dodger Channel (DC), Wizard Island (WI), Robber's Passage (RP), Numukamis Bay (NB), Crickitt Bay (CB). Additional artificial seagrass deployment sites are indicated with green stars; Eagle Bay (EB), Bulldozer Beach (BB), Clifton Point (CL).}
+\label{fig:bammap}
+\end{figure}
+
+\subsection{Epifaunal Sampling}
+To facilitate community comparisons of plots within and among meadows, I sampled standard plots in a structured spatial regime in May and August of 2012. Each epifaunal community was sampled twice at Wizard Island (20 May 2012, 5 August 2012), Robber's Passage (22 May 2012, 7 August 2012), Numukamis Bay (24 May 2012, 9 August 2012), Crickitt Bay (26 May 2012, 11 August 2012), and Dodger Channel (28 May 2012, 3 August 2012). I sampled subtidally using SCUBA in a 4 x 4 m design for a total of 16 0.28 m\squared plots per site, each plot spaced 1 m from its nearest neighbor after~\citet{Sanders:2007b} (Figure~\ref{fig:DiveFig}). This method allows for comparison of diversity among plots and meadows while standardizing for total area sampled. Sampling at each site took place within contiguous meadows not closer than 2 m to the edge to minimize the risk of capturing edge effects in diversity and composition of epifauna. All sampled areas were at least 1 m below LLWLT, and did not vary in depth by more than a meter at any given site.  I cut away seagrass within each sampled quadrat at the sediment-water interface and placed it into a 250$\mu$m mesh bag sufficient to capture all adult epifauna. Seagrass was then transported back to the lab in seawater and processed within 24 hours of collection. Samples were preserved in 70\% EtOH and identified to species when possible, or grouped by morpho-species to finest taxonomic resolution with light microscopy.
+
+\begin{figure}[H] 
+ \centering 
+ \includegraphics[width=8cm]{DiveFig} % Include the pdf
+ \caption{Sampling regime at each meadow. Inset depicts horizontal section of seagrass sampled in each quadrat. } % Add a caption
+ \label{fig:DiveFig} % Define a reference for this figure
+\end{figure}
+
+\subsection{Quantifying Abiotic Conditions, Seagrass Density, \& Productivity}
+ 
+ \subsubsection{Temperature/Salinity Monitoring}
+ 
+To characterize water conditions, all sites were monitored for temperature and salinity by boat using a hand held temperature/salinity probe (YSI Inc., OH USA).  Measurements were taken at various times of day and at different points in the tidal cycle.  Three stations were established at each site representing approximately the center, and furthest edges of the largest contiguous meadow.  At each station temperature and salinity were recorded at the surface, 2 m below the surface, and directly above the bottom.  If the bottom was at 2m, only surface and 2m depth were recorded.  If the bottom was shallower than 2m, bottom depth was recorded and surface and bottom measurements were taken.  
+
+\subsubsection{Meadow Structural Parameters}
+
+Meadow area was calculated by visual survey, paired with the Community Mapping Network database~\citep{CMN:2013:Online} and estimations made in Google Earth v 7.1.1.1888.
+
+Meadow structural parameters were measured concurrently with epifaunal sampling. A 0.28m\squared quadrat was placed outside each corner of a 4 x 4 m grid demarcated for community sampling.  All shoots within the quadrat were counted, and one haphazardly selected shoot was removed for leaf area for a maximum of four shoots per site/time. 
+
+Number of blades per shoot were determined for each seagrass shoot and the longest blade was measured for length (from top of sheath to tip of blade) and width (at the midpoint). To calculate leaf area the width and length of the longest blade were multiplied by the number of blades for each shoot~\citep[after][]{Borg:2010}.  It should be noted that this resulted in a probable overestimation of total leaf area, however, consistent measuring procedure allows for comparison of relative leaf area across sites and sampling times.
+
+\subsubsection{Artificial Seagrass \& Dispersal}
+
+To estimate the potential for presettlement processes to influence the community composition, I quantified the presence of seagrass associated epifauna outside of seagrass meadows. Three artificial seagrass units (ASUs) were deployed at six sites in Barkley Sound including Dodger Channel, Robber's Passage, Crickitt Bay, Eagle Bay (48\degree 50.024'N, 125\degree 08.788'W), Bulldozer Beach (48\degree 52.134'N, 125\degree 09.874'W), and Clifton Point (48\degree 55.105'N, 125\degree 03.697'W) (Figure~\ref{fig:bammap}). Units were constructed of 30cm lengths of PVC anchoring material with two 25 cm segments of frayed polypropylene rope affixed at one end. Units were deployed in groups of three at each site, approximately 1 m apart and anchored to the sediment parallel to shore at approximately 0.5m above lower low water large tide (LLWLT). ASUs were first primed in flowthrough seawater tables for seven days to accumulate natural algal epiphytes and provide more suitable substrate for epifaunal organisms. Units were left in the field for two weeks in July 2013. Once collected all ASUs were gently rinsed and attached organisms were removed and filtered through a 500$\mu$m sieve to capture target species. All specimens were preserved in 70$\%$ EtOH and identified to lowest taxonomic category possible.
+
+\subsection{Statistical Analyses}
+
+\subsubsection{Treatment of Data}
+
+The variance of all response variables in the following datasets were tested for normality using the Shapiro-Wilk test and visualized with quantile-quantile plots. Where variance among samples was homogenous, linear models were created and analysis of variance (ANOVA) tests were run and pairwise differences between groups detected with post-hoc Tukey tests. Where variance among samples was different, generalized linear models (GLM) were made using a Poisson Distribution and subjected to analysis of deviance Chi-squared tests (ANODE-Chi). General linear hypotheses (GLH) were used to detect pairwise differences in the GLM. Where data was not normally distributed and bounded between 0 and 1, but not strictly binomial (diversity and evenness measures), values were multiplied by 100 and an offset term was added to the GLM.
+
+\subsubsection{Comparison of Biotic \& Abiotic Factors Among Sites}
+
+All differences in abiotic and structural parameters  among sites were tested with ANOVA, post-hoc Tukey tests, ANODE-Chi, and GLH. 
+
+\subsubsection{Quantifying Epifaunal Abundance/Diversity In \& Between Seagrass Meadows}
+
+Differences in richness between ASUs inside and outside seagrass were tested with ANOVA.  Presence/absence of organisms was used to determine the dispersal capability of collected taxa.
+
+\subsubsection{Quantifying \& Comparing Epifaunal Communities}
+
+\paragraph{Morpho-species Grouping}
+\label{par:morphospp}
+
+The variable appearance of some epifaunal groups based on age and sex, as well as the damaging effects of preservation, can artificially inflate measures of richness and diversity. In order to account for this effect, similar taxonomic groups were condensed into broader morpho-species categories. These more conservative groupings allow more accurate assignment to taxonomic categories. For the purpose of all futher analyses, only results for these data are shown. For results of the raw dataset see Appendix A. 
+
+\paragraph{Abundance}
+
+Abundance of epifauana consisted of mean numerical counts of organisms across all size classes within each sample. Log abundance of counts was used for visual comparisons where counts spanned more than one order of magnitude. Rank abundance curves were generated for each site and time. 
+
+\paragraph{Richness}
+
+Epifaunal richness was calculated for each sample collected as total number of species encountered per sample. Given the same regional species pool, a greater abundance of organisms in a sample could correlate with a greater likelihood of detecting rare species, and therefore, a higher estimate of local richness. To control for this effect of abundance, I also calculated rarified richness~\citep{Buddle:2005}. Differences between measures of raw richness were analysed using ANODE-Chi and GLH. Rarefied richness was analysed with ANOVA and post-hoc Tukey.
+
+\paragraph{Diversity \& Evenness}
+
+Diversity within meadows was calculated for each site and sampling time with Simpson's Index:
+
+\begin{equation}D_{simp}=1-\sum_{i=1}^{n}p_{i}^{2}\label{eq:Simpson}\end{equation}
+
+This measure accounts for heterogeneity (richness and evenness) in the community and is robust to the effects of highly abundant species \citep{Magurran:2004}. All values are bounded between 0 and 1, with greater diversity indicated by higher values. Evenness was calculated using Simpson's Evenness measure:
+
+\begin{equation}E_{1/D}=\frac{1/D}{S}\end{equation}
+
+This measure is derived from Simpson's Diversity Index and is recommended for use when Simpson's Index is already used~\citep{Magurran:2004}. Beta diversity within and among meadows was calculated using the Bray-Curtis dissimilarity measure:
+
+\begin{equation}d^{BCD}_{ij}=\frac{\sum\limits_{k=1}^{n}|x_{ik}-x_{jk}|}{\sum\limits_{k=1}^{n}(x_{ik}+x_{jk})}\label{eq:Bray}\end{equation}
+
+The Bray-Curtis dissimilarity measure is a quantitative method for estimating beta diversity as variation among samples that accounts for composition of a community as well as the relative abundance of organisms~\citep{Clark:2001,Anderson:2011}. Values are bounded between 0 and 1, 0 representing complete similarity, 1 representing complete dissimilarity.
+
+
+\paragraph{Community Composition}
+
+Variation within and among communities attributed to species abundance and composition was tested with permutational analysis of variance (PERMANOVA) using a Modified Gower transformation and visualized in a non-metric multidimensional scaling plot (nMDS). Contributions of species to dissimilarity among sites were calculated with 4$^{th}$ root transformed data in similarity percentage (SIMPER) analysis using pairwise comparisions of the Bray-Curtis dissimilarity measure (Equation~\ref{eq:Bray}) which were then compared with rank abundance curves to determine if trends were driven by common or rare species.
+
+\subsubsection{Quantifying Relationships Between Structural Parameters \& Epifaunal Communities}
+
+I used linear and mixed-effects to test for linear correlations between estimates of epifanual community abundance and diversity, and seagrass meadow biotic and abiotic properties. Best model fits were determined by the Akaike Information Criterion (AIC). 
+
+\subsubsection{Statistical Packages}
+
+All analyses were run in R version 3.0.0~\citep{R:2013} using the vegan package~\citep{vegan:2013} for community analyses, and visualized in the Lattice package~\citep{Lattice:2008}. Additional multivariate statistical approaches were run and visualized with Primer-E~\citep{PRIMER:2006}.
+
+
+\section{Results}
+
+\subsection{Comparison of Biotic \& Abiotic Factors Among Sites}
+
+The mean summer water temperature of sites between May 1, 2012 and August 11, 2012 (DC: n = 63, WI: n = 76, RP: n = 59, NB: n = 57, CB: n = 55) increased closer to the Alberni watershed in the northeast (Table~\ref{table:temp}), and a concurrent decline in mean salinity was also seen (Table~\ref{table:sal}, Figure~\ref{fig:tempsal}). Mean temperatures ranged from 12.5 to 14.5 \degree C, mean salinities were seen from 26 ppt to 17 ppt. 
+
+<<label = table:temp, echo = FALSE, results = tex>>=
+
+alltempsal <- read.csv("4_Feb_13_TempSalData2.csv", stringsAsFactors = FALSE)
+
+alltempsal$site <- factor(alltempsal$site, levels= c(c("Dodger","Wizard","Robbers","Numukamis", "Crickitt")))
+
+alltempsal$Date <- as.Date(alltempsal$Date, format = "%d-%b-%y")
+
+#temp.lm <- lm(average.temp ~ site, data = alltempsal)
+
+#shapiro.test(temp.lm$residuals)
+#  Shapiro-Wilk normality test
+
+#data:  temp.lm$residuals
+#W = 0.8767, p-value = 3.502e-15
+
+temp.glm <- glm(average.temp ~ site, data = alltempsal, family = "quasipoisson")
+temp.aov <- anova(temp.glm, test = "Chi")
+temp.aov <- as.matrix(temp.aov)
+
+print(xtable(temp.aov, caption = "ANODE-Chi of mean temperatures across all sites from May to August", label = "table:temp", digits = c(0,0,2,2,3,4), table.placement = "tbp"), caption.placement = "top")
+@
+
+<<label = table:sal, echo = FALSE, results = tex>>=
+
+alltempsal <- read.csv("4_Feb_13_TempSalData2.csv", stringsAsFactors = FALSE)
+
+alltempsal$site <- factor(alltempsal$site, levels= c(c("Dodger","Wizard","Robbers","Numukamis", "Crickitt")))
+
+alltempsal$Date <- as.Date(alltempsal$Date, format = "%d-%b-%y")
+
+#sal.lm <- lm(average.sal ~ site, data = alltempsal)
+
+#shapiro.test(sal.lm$residuals)
+#  Shapiro-Wilk normality test
+
+#data:  sal.lm$residuals
+#W = 0.9773, p-value = 7.1e-05
+
+sal.glm <- glm(average.sal ~ site, data = alltempsal, family = "quasipoisson")
+sal.aov <- anova(sal.glm, test = "Chi")
+sal.aov <- as.matrix(sal.aov)
+
+print(xtable(temp.aov, caption = "ANODE-Chi of mean salinities across all sites from May to August", label = "table:sal", digits = c(0,0,2,2,3,4), table.placement = "tbp"), caption.placement = "top")
+@
+
+\begin{figure}[H]
+\begin{center}
+<<label = fig:tempsal, echo = FALSE, fig = TRUE, results = HIDE, height = 8>>=
+
+########################
+#########TEMP SAL DATA##
+########################
+
+par(mfrow = c(2,1))
+
+alltempsal <- read.csv("4_Feb_13_TempSalData2.csv", stringsAsFactors = FALSE)
+
+alltempsal$site <- factor(alltempsal$site, levels= c(c("Dodger","Wizard","Robbers","Numukamis", "Crickitt")))
+
+alltempsal$Date <- as.Date(alltempsal$Date, format = "%d-%b-%y")
+
+#calculate means of temp across all sites:
+means <- tapply(alltempsal$average.temp, list(alltempsal$site), mean)
+
+#sd across all sites:
+st.dev <- tapply(alltempsal$average.temp, list(alltempsal$site), sd)
+
+#se across all sites
+st.err <- tapply(alltempsal$average.temp, list(alltempsal$site), sterror)
+
+#for plot axes:
+names <- c("DC","WI","RP","NB", "CB")
+
+barplot2(means, plot.ci = TRUE, ci.u = means + st.err, ci.l = means - st.err, 
+         names.arg = names, space = 0, , xpd = FALSE, ylim = c(11, 16), 
+         ylab = "average sea temp (C)", cex.axis = 1.5, 
+         ci.lwd = 2, cex.names = 2, cex.lab = 1.4)
+
+#temp.lm <- lm(average.temp ~ site, data = alltempsal)
+
+#shapiro.test(temp.lm$residuals)
+#  Shapiro-Wilk normality test
+
+#data:  temp.lm$residuals
+#W = 0.8767, p-value = 3.502e-15
+
+#temp.glm <- glm(average.temp ~ site, data = alltempsal, family = "quasipoisson")
+#temp.aov <- anova(temp.glm, test = "Chi")
+#temp.aov
+#Analysis of Deviance Table
+
+#Model: quasipoisson, link: log
+
+#Response: average.temp
+
+#Terms added sequentially (first to last)
+
+#     Df Deviance Resid. Df Resid. Dev  Pr(>Chi)    
+#NULL                   313     160.28              
+#site  4   14.888       309     145.39 5.817e-06 ***
+#---
+#Signif. codes:  0 ‘***’ 0.001 ‘**’ 0.01 ‘*’ 0.05 ‘.’ 0.1 ‘ ’ 1
+
+#temp.tuk <- glht(temp.glm, linfct = mcp(site = "Tukey"))
+#summary(temp.tuk)
+#   Simultaneous Tests for General Linear Hypotheses
+
+#Multiple Comparisons of Means: Tukey Contrasts
+
+#Fit: glm(formula = average.temp ~ site, family = "quasipoisson", data = alltempsal)
+
+#Linear Hypotheses:
+#                           Estimate Std. Error z value Pr(>|z|)    
+#Wizard - Dodger == 0       0.078250   0.033153   2.360   0.1262    
+#Robbers - Dodger == 0      0.110350   0.034858   3.166   0.0135 *  
+#Numukamis - Dodger == 0    0.163674   0.034694   4.718   <0.001 ***
+#Crickitt - Dodger == 0     0.156116   0.035215   4.433   <0.001 ***
+#Robbers - Wizard == 0      0.032100   0.032731   0.981   0.8639    
+#Numukamis - Wizard == 0    0.085424   0.032556   2.624   0.0660 .  
+#Crickitt - Wizard == 0     0.077866   0.033110   2.352   0.1286    
+#Numukamis - Robbers == 0   0.053324   0.034291   1.555   0.5261    
+#Crickitt - Robbers == 0    0.045766   0.034818   1.314   0.6819    
+#Crickitt - Numukamis == 0 -0.007558   0.034653  -0.218   0.9995    
+#---
+#Signif. codes:  0 ‘***’ 0.001 ‘**’ 0.01 ‘*’ 0.05 ‘.’ 0.1 ‘ ’ 1
+#(Adjusted p values reported -- single-step method)
+
+
+text(0.5, 13.5, label = "A", cex = 1.4)
+text(1.5, 14.5, label = "AB", cex = 1.4)
+text(2.5, 15, label = "B", cex = 1.4)
+text(3.5,15.75, label = "B", cex = 1.4)
+text(4.5, 15.6, label = "B", cex = 1.4)
+
+
+
+
+#calculate means of sal across all sites:
+means <- tapply(alltempsal$average.sal, list(alltempsal$site), mean)
+
+#sd across all sites:
+st.dev <- tapply(alltempsal$average.sal, list(alltempsal$site), sd)
+
+#se across all sites
+st.err <- tapply(alltempsal$average.sal, list(alltempsal$site), sterror)
+
+#for plot axes:
+names <- c("DC","WI","RP","NB", "CB")
+
+barplot2(means, plot.ci = TRUE, ci.u = means + st.err, ci.l = means - st.err, 
+         names.arg = names, space = 0, , xpd = FALSE, ylim = c(14, 29), 
+         ylab = "average sea salinity (ppt)", cex.axis = 1.5, 
+         ci.lwd = 2, cex.names = 2, cex.lab = 1.4)
+
+#sal.lm <- lm(average.sal ~ site, data = alltempsal)
+
+#shapiro.test(sal.lm$residuals)
+#  Shapiro-Wilk normality test
+
+#data:  sal.lm$residuals
+#W = 0.9773, p-value = 7.1e-05
+
+#sal.glm <- glm(average.sal ~ site, data = alltempsal, family = "quasipoisson")
+#sal.aov <- anova(sal.glm, test = "Chi")
+#sal.aov
+#Analysis of Deviance Table
+
+#Model: quasipoisson, link: log
+
+#Response: average.sal
+
+#Terms added sequentially (first to last)
+
+#     Df Deviance Resid. Df Resid. Dev  Pr(>Chi)    
+#NULL                   313     433.84              
+#site  4   164.94       309     268.90 < 2.2e-16 ***
+#---
+#Signif. codes:  0 ‘***’ 0.001 ‘**’ 0.01 ‘*’ 0.05 ‘.’ 0.1 ‘ ’ 1
+
+#sal.tuk <- glht(sal.glm, linfct = mcp(site = "Tukey"))
+#summary(sal.tuk)
+#   Simultaneous Tests for General Linear Hypotheses
+
+#Multiple Comparisons of Means: Tukey Contrasts
+
+#Fit: glm(formula = average.sal ~ site, family = "quasipoisson", data = alltempsal)
+
+#Linear Hypotheses:
+#                          Estimate Std. Error z value Pr(>|z|)    
+#Wizard - Dodger == 0      -0.17007    0.03165  -5.374  < 1e-04 ***
+#Robbers - Dodger == 0     -0.13658    0.03349  -4.079 0.000476 ***
+#Numukamis - Dodger == 0   -0.43659    0.03696 -11.813  < 1e-04 ***
+#Crickitt - Dodger == 0    -0.39392    0.03708 -10.624  < 1e-04 ***
+#Robbers - Wizard == 0      0.03350    0.03338   1.004 0.852671    
+#Numukamis - Wizard == 0   -0.26652    0.03686  -7.231  < 1e-04 ***
+#Crickitt - Wizard == 0    -0.22385    0.03698  -6.053  < 1e-04 ***
+#Numukamis - Robbers == 0  -0.30002    0.03845  -7.803  < 1e-04 ***
+#Crickitt - Robbers == 0   -0.25734    0.03857  -6.673  < 1e-04 ***
+#Crickitt - Numukamis == 0  0.04267    0.04162   1.025 0.842483    
+#---
+#Signif. codes:  0 ‘***’ 0.001 ‘**’ 0.01 ‘*’ 0.05 ‘.’ 0.1 ‘ ’ 1
+#(Adjusted p values reported -- single-step method)
+
+text(0.5,27.5,label = "C", cex = 1.4)
+text(1.5,23.75, label = "B", cex = 1.4)
+text(2.5,24.5, label = "B", cex = 1.4)
+text(3.5,18.5, label = "A", cex = 1.4)
+text(4.5,19, label = "A", cex = 1.4)
+
+@
+\end{center}
+\caption{Average water temperature and salinity from May to August, 2012. Temperatures and salinities were different among sites with pairwise differences between sites (Tests for General Linear Hypotheses, p < 0.05).}
+\label{fig:tempsal}
+\end{figure}
+
+Meadow area over the course of the summer was approximately 22,980 m\squared (DC), 2,645 m\squared (WI), 7,213 m\squared (RP), 26,960 m\squared (NB), and 4,950 m\squared (CB). 
+
+Mean shoot density was higher at DC that CB in May (Table~\ref{table:Adens}). By August no differences in density among meadows were seen (Table~\ref{table:Edens}), however,  a trend for higher densities at DC and lower densities at CB remained (Figure~\ref{fig:dens}).
+
+<<label = table:Adens, echo = FALSE, results = tex>>=
+  
+  dense <- read.csv("SeagrassMetrics.csv")
+#str(dense)
+
+Adens <- subset(dense, time == "May")
+
+Adens.lm <- lm(Shoots ~ site, data = Adens)
+
+#shapiro.test(Adens.lm$residuals)
+#  Shapiro-Wilk normality test
+
+#data:  Adens.lm$residuals
+#W = 0.9632, p-value = 0.6928
+
+Adens.aov <- anova(Adens.lm)
+#Adens.aov
+#  Shapiro-Wilk normality test
+
+#data:  Adens.lm$residuals
+#W = 0.9632, p-value = 0.6928
+Adens.aov <- anova(Adens.lm)
+Adens.aov <- as.matrix(Adens.aov)
+
+print(xtable(Adens.aov, caption = "ANOVA of seagrass density in May", label = "table:Adens", digits = c(0,0,2,2,3,4), table.placement = "tbp"), caption.placement = "top")
+
+#Adens.aov <- aov(Shoots ~ site, data = Adens)
+#TukeyHSD(Adens.aov)
+#  Tukey multiple comparisons of means
+#    95% family-wise confidence level
+
+#Fit: aov(formula = Shoots ~ site, data = Adens)
+
+#$site
+#       diff        lwr       upr     p adj
+#DC-CB  8.25   1.418365 15.081635 0.0160821
+#NB-CB  2.50  -4.331635  9.331635 0.7694233
+#RP-CB  3.50  -4.867010 11.867010 0.6773298
+#WI-CB  4.00  -3.379009 11.379009 0.4541269
+#NB-DC -5.75 -12.581635  1.081635 0.1157706
+#RP-DC -4.75 -13.117010  3.617010 0.4117495
+#WI-DC -4.25 -11.629009  3.129009 0.3985754
+#RP-NB  1.00  -7.367010  9.367010 0.9949076
+#WI-NB  1.50  -5.879009  8.879009 0.9637679
+#WI-RP  0.50  -8.319603  9.319603 0.9997238
+
+@
+
+<<label = table:Edens, echo = FALSE, results = tex>>=
+  
+#NO DIFFERENCE AMONG MEADOWS
+
+  dense <- read.csv("SeagrassMetrics.csv")
+#str(dense)
+
+Edens <- subset(dense, time == "August")
+
+Edens.lm <- lm(Shoots ~ site, data = Edens)
+
+#shapiro.test(Edens.lm$residuals)
+#  Shapiro-Wilk normality test
+
+#data:  Edens.lm$residuals
+#W = 0.9678, p-value = 0.7322
+
+Edens.aov <- anova(Edens.lm)
+Edens.aov <- as.matrix(Edens.aov)
+
+print(xtable(Edens.aov, caption = "ANOVA of seagrass density in August", label = "table:Edens", digits = c(0,0,2,2,3,4), table.placement = "tbp"), caption.placement = "top")
+
+@
+
+\begin{figure}[H]
+\begin{center}
+<<label = fig:dens, echo = FALSE, fig = TRUE, results = HIDE>>=
+  
+  ######Metrics of primary site seagrass (density, length, width, blades)
+  
+  metrics <- read.csv("SeagrassMetrics.csv")
+metrics$site <- factor(metrics$site, levels = (c("DC","WI","RP","NB","CB")))
+
+Ametrics <- subset(metrics, time == "May")
+Emetrics <- subset(metrics, time == "August")
+
+par(mfrow = c(2,1))
+par(mar = c(2,5,1.5,1))
+
+mean <- tapply(Ametrics$Shoots, Ametrics$site, mean)
+
+serror <- tapply(Ametrics$Shoots, Ametrics$site, sterror)
+
+
+barplot2(mean, beside = TRUE, plot.ci = TRUE, ci.l = mean - serror,
+         ci.u = mean + serror, ylim = c(0,16), xaxt = 'n',
+         ylab = expression(paste("shoot density, cm"^{2}," per 0.28m"^{2}," plot")))
+text(5.5,14, "A", cex = 2)
+text(0.7,15, "B")
+text(1.9,13, "AB")
+text(3.1,12, "AB")
+text(4.3,9, "AB")
+text(5.5,7, "A")
+
+mean <- tapply(Emetrics$Shoots, Emetrics$site, mean)
+
+serror <- tapply(Emetrics$Shoots, Emetrics$site, sterror)
+
+barplot2(mean, beside = TRUE, plot.ci = TRUE, ci.l = mean - serror, 
+         ci.u = mean + serror,  ylim = c(0,16),
+         xlab = "Site", ylab = expression(paste("shoot density, cm"^{2}," per 0.28m"^{2}," plot")))
+text(5.5, 14, "B", cex = 2)
+
+
+@
+\end{center}
+\caption{Shoot density in May (A) and August (B) in 0.28m$^{2}$ quadrats for each sampling site. Bars represent standard error.}
+\label{fig:dens}
+\end{figure}
+
+Leaf area index was different among sites in May and August (Tables~\ref{table:ALAI}, ~\ref{table:ELAI}). LAI was higher at DC than NB in May, but was higher than CB in August (Figure~\ref{fig:LAI}). 
+
+<<label = table:ALAI, echo = FALSE, results = tex>>=
+  
+  metrics <- read.csv("SeagrassMetrics.csv")
+#str(metrics)
+
+Ametrics <- subset(metrics, time == "May")
+
+ALAI.lm <- lm(LAI ~ site, data = Ametrics)
+
+#shapiro.test(ALAI.lm$residuals)
+#  Shapiro-Wilk normality test
+
+#data:  ALAI.lm$residuals
+#W = 0.9657, p-value = 0.7391
+
+ALAI.aov <- anova(ALAI.lm)
+#summary(ALAI.aov)
+#            Df    Sum Sq  Mean Sq F value Pr(>F)  
+#site         4 110292881 27573220    3.71 0.0345 *
+#Residuals   12  89176589  7431382                 
+#---
+#Signif. codes:  0 ‘***’ 0.001 ‘**’ 0.01 ‘*’ 0.05 ‘.’ 0.1 ‘ ’ 1
+ALAI.aov <- as.matrix(ALAI.aov)
+
+print(xtable(ALAI.aov, caption = "ANOVA of LAI in May", label = "table:ALAI", digits = c(0,0,2,2,3,4), table.placement = "tbp"), caption.placement = "top")
+
+#ALAI.aov <- aov(LAI ~ site, data = Ametrics)
+#TukeyHSD(ALAI.aov)
+# Tukey multiple comparisons of means
+#    95% family-wise confidence level
+
+#Fit: aov(formula = LAI ~ site, data = Ametrics)
+
+#$site
+#           diff          lwr        upr     p adj
+#DC-CB  6133.850    -10.28528 12277.9853 0.0504552
+#NB-CB  -310.525  -6454.66028  5833.6103 0.9998248
+#RP-CB   341.700  -7183.29817  7866.6982 0.9998855
+#WI-CB  2024.433  -4611.99126  8660.8579 0.8624545
+#NB-DC -6444.375 -12588.51028  -300.2397 0.0383387
+#RP-DC -5792.150 -13317.14817  1732.8482 0.1664848
+#WI-DC -4109.417 -10745.84126  2527.0079 0.3336819
+#RP-NB   652.225  -6872.77317  8177.2232 0.9985311
+#WI-NB  2334.958  -4301.46626  8971.3829 0.7926458
+#WI-RP  1682.733  -6249.31120  9614.7779 0.9579363
+
+@
+
+<<label = table:ELAI, echo = FALSE, results = tex>>=
+  
+  metrics <- read.csv("SeagrassMetrics.csv")
+#str(metrics)
+
+Emetrics <- subset(metrics, time == "August")
+
+ELAI.lm <- lm(LAI ~ site, data = Emetrics)
+
+#shapiro.test(ALAI.lm$residuals)
+#  Shapiro-Wilk normality test
+
+#data:  ALAI.lm$residuals
+#W = 0.9657, p-value = 0.7391
+
+ELAI.aov <- anova(ELAI.lm)
+#summary(ALAI.aov)
+#            Df    Sum Sq  Mean Sq F value Pr(>F)  
+#site         4 110292881 27573220    3.71 0.0345 *
+#Residuals   12  89176589  7431382                 
+#---
+#Signif. codes:  0 ‘***’ 0.001 ‘**’ 0.01 ‘*’ 0.05 ‘.’ 0.1 ‘ ’ 1
+ELAI.aov <- as.matrix(ELAI.aov)
+
+print(xtable(ELAI.aov, caption = "ANOVA of LAI in August", label = "table:ELAI", digits = c(0,0,2,2,3,4), table.placement = "tbp"), caption.placement = "top")
+
+#ELAI.aov <- aov(LAI ~ site, data = Emetrics)
+#TukeyHSD(ELAI.aov)
+#  Tukey multiple comparisons of means
+#    95% family-wise confidence level
+
+#Fit: aov(formula = LAI ~ site, data = Emetrics)
+
+#$site
+#            diff        lwr       upr     p adj
+#DC-CB  4339.7500   358.9056 8320.5944 0.0298758
+#NB-CB   739.7625 -2945.7832 4425.3082 0.9684310
+#RP-CB   951.6250 -2733.9207 4637.1707 0.9249195
+#WI-CB  1048.6500 -2636.8957 4734.1957 0.8971847
+#NB-DC -3599.9875 -7580.8319  380.8569 0.0851258
+#RP-DC -3388.1250 -7368.9694  592.7194 0.1133790
+#WI-DC -3291.1000 -7271.9444  689.7444 0.1289146
+#RP-NB   211.8625 -3473.6832 3897.4082 0.9997385
+#WI-NB   308.8875 -3376.6582 3994.4332 0.9988437
+#WI-RP    97.0250 -3588.5207 3782.5707 0.9999883
+
+@
+
+\begin{figure}[H]
+\begin{center}
+<<label = fig:LAI, echo = FALSE, fig = TRUE, results = HIDE>>=
+  
+  ######Metrics of primary site seagrass (density, length, width, blades)
+  
+  metrics <- read.csv("SeagrassMetrics.csv")
+metrics$site <- factor(metrics$site, levels = (c("DC","WI","RP","NB","CB")))
+
+Ametrics <- subset(metrics, time == "May")
+Emetrics <- subset(metrics, time == "August")
+
+par(mfrow = c(2,1))
+par(mar = c(2,5,1.5,1))
+
+mean <- tapply(Ametrics$LAI, Ametrics$site, mean)
+
+serror <- tapply(Ametrics$LAI, Ametrics$site, sterror)
+
+
+barplot2(mean, beside = TRUE, plot.ci = TRUE, ci.l = mean - serror, xlab = NULL, xaxt = 'n',
+         ci.u = mean + serror, 
+         ylim = c(0,12000), ylab = expression(paste("leaf area, cm"^{2}," per 0.28m"^{2}," plot")))
+text(5.5,9000, "A", cex = 2)
+text(0.7,11000, "B")
+text(1.9, 7000, "AB")
+text(3.1,4000, "AB")
+text(4.3,3000, "A")
+text(5.5,4000, "AB")
+
+mean <- tapply(Emetrics$LAI, Emetrics$site, mean)
+
+serror <- tapply(Emetrics$LAI, Emetrics$site, sterror)
+
+barplot2(mean, beside = TRUE, plot.ci = TRUE, ci.l = mean - serror, 
+         ci.u = mean + serror,  
+         ylim = c(0,12000),xlab = "Site", ylab = expression(paste("leaf area, cm"^{2}," per 0.28m"^{2}," plot")))
+text(5.5, 9000, "B", cex = 2)
+text(0.7,10000, "B")
+text(1.9, 6000, "AB")
+text(3.1,6000, "AB")
+text(4.3,6500, "AB")
+text(5.5,5000, "A")
+
+
+@
+\end{center}
+\caption{Leaf area index in May (A) and August (B) in 0.28m$^{2}$ quadrats for each sampling site. Bars represent standard error.}
+\label{fig:LAI}
+\end{figure}
+
+
+\subsection{Quantifying Epifaunal Abundance/Diversity In \& Between Seagrass Meadows}
+
+Due to loss in the field and logistical difficulties, not all three ASUs per site were used in analysis (DC: n = 2, CB: n = 1, RP: n = 2, CL: n = 2, BB: n = 3, EB: n = 2). No differences in richness were detected between ASUs placed within seagrass meadows compared to those outside seagrass meadows (Table~\ref{table:ASUrich}). However, a trend for more species collected by ASUs within seagrass was observed (Figure~\ref{fig:ASUrich}). ASUs captured both overlapping and non-overlapping epifauna, 12 species which were shared, 9 found only in ASUs inside seagrass, and 5 found only in ASUs outside seagrass (Table~\ref{table:ASUpresabs}).
+
+<<label = table:ASUrich, echo = FALSE, results = tex>>=
+
+ASUagg <- read.csv("ASUagg.csv")
+
+#make presence/absence matrix and add up for richness
+presabsASU <- ASUagg
+presabsASU[presabsASU > 0] <- 1
+presabsASU$richness <- rowSums(presabsASU[!names(presabsASU)%in%c("site", "Date","sample", "treatment")])
+
+presabsASU.lm <- lm(richness ~ treatment, data = presabsASU)
+
+#shapiro.test(presabsASU.lm$residuals)
+#  Shapiro-Wilk normality test
+
+#data:  presabsASU.lm$residuals
+#W = 0.9463, p-value = 0.584
+
+#anova of richness
+presabsASU.aov <- anova(presabsASU.lm)
+presabsASU.aov <- as.matrix(presabsASU.aov)
+
+print(xtable(presabsASU.aov, caption = "ANOVA of species richness comparing ASU inside (in) versus outside (out) seagrass meadows", label = "table:ASUrich", digits = c(0,0,2,2,3,4), table.placement = "tbp"), caption.placement = "top")
+@
+ 
+\begin{figure}[H]
+\begin{center}
+<<label = fig:ASUrich, fig = TRUE, echo = FALSE, results = HIDE>>=
+
+ASUagg <- read.csv("ASUagg.csv")
+
+par(mar = c(5,5,2,1))
+
+#make presence/absence matrix and add up for richness
+presabsASU <- ASUagg
+presabsASU[presabsASU > 0] <- 1
+presabsASU$richness <- rowSums(presabsASU[!names(presabsASU)%in%c("site", "Date","sample", "treatment")])
+
+plot(richness ~ treatment, data = presabsASU, ylab = "# of species",cex.lab = 2, cex.axis = 1.5)
+
+@
+\end{center}
+\caption{Mean richness of ASUs placed inside (in) and outside (out) seagrass meadows in July 2013.}
+\label{fig:ASUrich}
+\end{figure}
+
+
+% Table generated by Excel2LaTeX from sheet 'Sheet2'
+\begin{table}
+  \caption{Presence (X) and absence (-) of species identified in ASUs inside (IN) and outside (OUT) seagrass meadows, July 2013.}
+  \begin{center}
+    \begin{tabular}{rcccccc}
+    \hline 
+          & \multicolumn{3}{c|}{IN} & \multicolumn{3}{|c}{OUT} \\
+    \hline \\
+    Site  & DC    & RP    & CB    & EB    & BB    & CL \\ 
+    \textit{Caprella sp.} & X     & X     & X     & X     & X     & X \\
+    \textit{Amphipoda} & X     & X     & X     & X     & X     & X \\
+    \textit{Nereidae} & X     & X     & X     & X     & X     & X \\
+    \textit{Copepoda} & X     & X     & X     & X     & -     & X \\
+    \textit{Tanaidacea} & X     & X     & X     & -     & -     & X \\
+    \textit{Gastropoda} & X     & X     & -     & X     & X     & X \\
+    Unidentified \textit{Caridea} & X     & X     & -     & -     & -     & - \\
+    \textit{Haminoea} & X     & -     & X     & -     & -     & - \\
+    Unidentified Microarthropod & X     & -     & X     & -     & -     & - \\
+    \textit{Leptostraca} & X     & -     & -     & X     & -     & - \\
+    \textit{Ostracoda} & X     & -     & -     & -     & -     & - \\
+    \textit{Bittium spp.} & X     & -     & -     & -     & -     & - \\
+    \textit{Idotea resecata} & -     & X     & X     & X     & X     & X \\
+    \textit{Mytilus sp.} & -     & X     & X     & X     & X     & X \\
+    \textit{Paracerceis sp.} & -     & X     & X     & -     & -     & X \\
+    \textit{Nematoda} & -     & X     & X     & -     & -     & - \\
+    Unidentified \textit{Bivalvia} & -     & X     & -     & X     & -     & - \\
+    Tubeworm & -     & X     & -     & -     & -     & - \\
+    Unknown \textit{Decapoda} & -     & X     & -     & -     & -     & - \\
+    \textit{Acari} & -     & -     & X     & -     & -     & - \\
+    \textit{Chironomidae} & -     & -     & X     & X     & -     & X \\
+    \textit{Nemertea} & -     & -     & -     & X     & -     & - \\
+    \textit{Clinocardium nuttallii} & -     & -     & -     & X     & -     & - \\
+    \textit{Calliostoma sp.} & -     & -     & -     & X     & -     & - \\
+    \textit{Pisaster ochraceus} & -     & -     & -     & -     & -     & X \\
+    \textit{Pycnogonida} & -     & -     & -     & -     & -     & X \\ \\
+    \hline
+    \end{tabular}
+    \end{center}
+  \label{table:ASUpresabs}%
+\end{table}%
+
+
+\subsection{Quantifying \& Comparing Epifaunal Communities Among Meadows}
+
+\subsubsection{Abundance}
+\label{sec:abunresult}
+
+Abundance of organisms differed among sites and times (Table~\ref{table:abun}). Mean organismal abundance in May 2012 was relatively low and differed among sites, except for WI and CB (Figure~\ref{fig:abun}). Abundances in August were larger at all sites, with differences observed among all sites. Strength of changes in abundance through time were dependent on site identity.  Abundance decreased from highest abundance at DC, to lowest abundances at NB and CB. Dominant taxa contributing to organismal abundances differed among sites through time (Figures~\ref{fig:rankabunmay} and~\ref{fig:rankabunaug}). ~\emph{Caprella sp.} were most abundant at DC and RP in May, while ~\emph{Amphipoda},~\emph{Idotea resecata}, and~\emph{Pycnogonida} were most abundant at WI, NB, and CB respectively. In August, the numerically dominant taxa were~\emph{Phyllaplysia taylori} at DC and RP, and~\emph{Mytilus spp.} at WI, NB, and CB.
+
+
+<<label = table:abun, echo = FALSE, results = tex>>=
+
+#community partitioned by sample
+comm <- read.csv("sievedPCA.csv")
+
+#reorder factors
+comm$site <- factor(comm$site, levels = c("DC", "WI", "RP", "NB", "CB")) 
+comm$time <- factor(comm$time, levels = c("May","August"))
+
+#make abundance totals per sample
+comm$abun <- rowSums(comm[!names(comm)%in%c("site","time", "Sample")])
+
+abun.glm <- glm(abun ~ site*time , data = comm, family="poisson")
+
+#anova of richness
+abun.aov <- anova(abun.glm,test="Chi")
+abun.aov <- as.matrix(abun.aov)
+
+print(xtable(abun.aov, caption = "ANODE-Chi of organismal abundance by site and time.", label = "table:abun", digits = c(0,0,2,2,3,4), table.placement = "tbp"), caption.placement = "top")
+@
+
+
+\begin{figure}[H]
+\begin{center}
+<<label = fig:abun, echo = FALSE, fig = TRUE, results = HIDE>>=
+
+par(mfrow = c(1,1))
+
+#community partitioned by sample
+comm <- read.csv("sievedPCA.csv")
+
+#reorder factors
+comm$site <- factor(comm$site, levels = c("DC", "WI", "RP", "NB", "CB")) 
+comm$time <- factor(comm$time, levels = c("May","August"))
+
+#make abundance totals per sample
+comm$abun <- rowSums(comm[!names(comm)%in%c("site","time", "Sample")])
+comm$log.abun <- log10(comm$abun)
+
+abun.lm <- lm(abun~site*time, data = comm)
+
+#plot(abun.lm)
+#shapiro.test(abun.lm$residuals)
+#  Shapiro-Wilk normality test
+
+#data:  abun.lm$residuals
+#W = 0.6904, p-value < 2.2e-16
+
+abun.glm <- glm(abun ~ site*time , data = comm, family="poisson")
+
+#anova(abun.glm,test="Chi")
+#Analysis of Deviance Table
+
+#Model: poisson, link: log
+
+#Response: abun
+
+#Terms added sequentially (first to last)
+
+ #         Df Deviance Resid. Df Resid. Dev  Pr(>Chi)    
+#NULL                        159      80580              
+#site       4    22924       155      57656 < 2.2e-16 ***
+#time       1    35316       154      22339 < 2.2e-16 ***
+#site:time  4     1615       150      20724 < 2.2e-16 ***
+#---
+#Signif. codes:  0 ‘***’ 0.001 ‘**’ 0.01 ‘*’ 0.05 ‘.’ 0.1 ‘ ’ 1
+
+
+
+abunA <- subset(comm, comm$time == "May")
+abunE <- subset(comm, comm$time == "August")
+
+abuna.glm <- glm(abun ~ site, data = abunA, family = "poisson")
+abuna.tuk <- glht(abuna.glm, linfct = mcp(site = "Tukey"))
+summary(abuna.tuk)
+#   Simultaneous Tests for General Linear Hypotheses
+
+#Multiple Comparisons of Means: Tukey Contrasts
+
+#Fit: glm(formula = abun ~ site, family = "poisson", data = abunA)
+
+#Linear Hypotheses:
+#              Estimate Std. Error z value Pr(>|z|)    
+#WI - DC == 0 -0.950542   0.057525 -16.524  < 1e-04 ***
+#RP - DC == 0 -0.183799   0.045068  -4.078 0.000506 ***
+#NB - DC == 0 -0.481135   0.049143  -9.790  < 1e-04 ***
+#CB - DC == 0 -0.948158   0.057476 -16.497  < 1e-04 ***
+#RP - WI == 0  0.766744   0.059121  12.969  < 1e-04 ***
+#NB - WI == 0  0.469407   0.062283   7.537  < 1e-04 ***
+#CB - WI == 0  0.002384   0.069048   0.035 1.000000    
+#NB - RP == 0 -0.297337   0.051002  -5.830  < 1e-04 ***
+#CB - RP == 0 -0.764360   0.059073 -12.939  < 1e-04 ***
+#CB - NB == 0 -0.467023   0.062237  -7.504  < 1e-04 ***
+#---
+#Signif. codes:  0 ‘***’ 0.001 ‘**’ 0.01 ‘*’ 0.05 ‘.’ 0.1 ‘ ’ 1
+#(Adjusted p values reported -- single-step method)
+
+abune.glm <- glm(abun ~ site, data = abunE, family = "poisson")
+abune.tuk <- glht(abune.glm, linfct = mcp(site = "Tukey"))
+summary(abune.tuk)
+#   Simultaneous Tests for General Linear Hypotheses
+
+#Multiple Comparisons of Means: Tukey Contrasts
+
+#Fit: glm(formula = abun ~ site, family = "poisson", data = abunE)
+
+#Linear Hypotheses:
+#             Estimate Std. Error z value Pr(>|z|)    
+#WI - DC == 0 -0.61120    0.01268 -48.219  < 1e-07 ***
+#RP - DC == 0 -0.69286    0.01302 -53.215  < 1e-07 ***
+#NB - DC == 0 -2.47574    0.02699 -91.721  < 1e-07 ***
+#CB - DC == 0 -2.26885    0.02456 -92.397  < 1e-07 ***
+#RP - WI == 0 -0.08167    0.01474  -5.542 2.37e-07 ***
+#NB - WI == 0 -1.86454    0.02786 -66.925  < 1e-07 ***
+#CB - WI == 0 -1.65766    0.02551 -64.989  < 1e-07 ***
+#NB - RP == 0 -1.78287    0.02802 -63.631  < 1e-07 ***
+#CB - RP == 0 -1.57599    0.02568 -61.371  < 1e-07 ***
+#CB - NB == 0  0.20688    0.03491   5.927  < 1e-07 ***
+#---
+#Signif. codes:  0 ‘***’ 0.001 ‘**’ 0.01 ‘*’ 0.05 ‘.’ 0.1 ‘ ’ 1
+#(Adjusted p values reported -- single-step method)
+
+#tapply(abunA$abun, abunA$site, mean)
+#tapply(abunE$abun, abunE$site, mean)
+
+n.groups <- 5
+
+# comparison matrix- rows are panels, columns are groups
+# these are computed elsewhere
+comparison.matrix <- rbind(
+  c('D','A','C','B','A'),
+  c('E','D','C','B','A')
+)
+
+bwplot(log.abun~site|time, data = comm, ylab = list(label = "log abundance"), xlab = list(label = "Sites"),
+       subscripts=TRUE, notch=FALSE, ylim = c(0,4),
+       strip=TRUE, aspect = 1.36,
+       par.settings=list(plot.symbol=list(col=1, cex=0.75), 
+                         box.dot=list(cex=0.75), box.rectangle=list(col=1, lwd = 2), box.umbrella=list(col=1, lty = 1, lwd = 2),
+                         layout.heights=list(top.padding=0.5, bottom.padding=-1)),
+       panel=function(x, y, n=n.groups, cm=comparison.matrix, ...) {
+         # basic bwplot
+         panel.bwplot(x, y, ...)
+         # compute offset from top of 'umbrella'
+         y.offset <- tapply(y, x, function(i) boxplot.stats(i)$stats[5])
+         # add text just above offset, by panel number
+         panel.text(1:n, y.offset + 0.4, cm[packet.number(), ], font=2)
+       })
+
+@
+\end{center}
+\caption{Log abundance of all organisms for each site in May and August, 2012.}
+\label{fig:abun}
+\end{figure}
+
+
+\begin{landscape}
+
+\setkeys{Gin}{width=1.5\textwidth}
+
+\begin{figure}
+\begin{center}
+<<label = rankabunmay, echo = FALSE, fig = TRUE, results = HIDE, width = 11>>=
+commsmall <- read.csv("smallsieved.csv")
+
+#reorder factors
+commsmall$site <- factor(commsmall$site, levels = c("DC", "WI", "RP", "NB", "CB")) 
+commsmall$time <- factor(commsmall$time, levels = c("May","August"))
+
+#identify and remove empty rows
+empties <- rowSums(commsmall[!names(commsmall)%in%c("site","time","Sample")])==0
+commsmall <- commsmall[which(!empties),]
+
+#str(commsmall)
+commA <- subset(commsmall,time == "May")
+commE <- subset(commsmall, time == "August")
+
+DCA <- subset(commA, commA$site == "DC")
+WIA <- subset(commA, commA$site == "WI")
+RPA <- subset(commA, commA$site == "RP")
+NBA <- subset(commA, commA$site == "NB")
+CBA <- subset(commA, commA$site == "CB")
+
+par(mfrow = c(1,5))
+
+### A PLOTS
+
+par(mar = c(4.5,4,1,1))
+
+DCAabun <- rankabundance(DCA[!names(DCA)%in%c("site","time","Sample")])
+rankplot(DCAabun, scale = 'abundance', main = "DC", cex.main = 1.5, ylim = c(0,700), specnames = list(1:2), cex.lab = 1.5)
+
+par(mar = c(4.5,3,1,2))
+
+WIAabun <- rankabundance(WIA[!names(WIA)%in%c("site","time","Sample")])
+rankplot(WIAabun, scale = 'abundance', main = "WI", cex.main = 1.5, ylim = c(0,700), yaxt = 'n', specnames = list(1:2), cex.lab = 1.5)
+
+RPAabun <- rankabundance(RPA[!names(RPA)%in%c("site","time","Sample")])
+rankplot(RPAabun, scale = 'abundance', main = "RP", cex.main = 1.5, ylim = c(0,700), yaxt = 'n', specnames = list(1:3), cex.lab = 1.5)
+
+NBAabun <- rankabundance(NBA[!names(NBA)%in%c("site","time","Sample")])
+rankplot(NBAabun, scale = 'abundance', main = "NB", cex.main = 1.5, ylim = c(0,700), yaxt = 'n', specnames = list(1:2), cex.lab = 1.5)
+
+CBAabun <- rankabundance(CBA[!names(CBA)%in%c("site","time","Sample")])
+rankplot(CBAabun, scale = 'abundance', main = "CB", cex.main = 1.5, ylim = c(0,700), yaxt = 'n', specnames = list(1:3), cex.lab = 1.5)
+
+
+@
+\end{center}
+\caption{Rank abundance curves of most abundant epifauna for each site in May, 2012.}
+\label{fig:rankabunmay}
+\end{figure}
+
+\begin{figure}
+\begin{center}
+<<label = rankabunaug, echo = FALSE, fig = TRUE, results = HIDE, width = 11>>=
+
+commsmall <- read.csv("smallsieved.csv")
+
+#reorder factors
+commsmall$site <- factor(commsmall$site, levels = c("DC", "WI", "RP", "NB", "CB")) 
+commsmall$time <- factor(commsmall$time, levels = c("May","August"))
+
+#identify and remove empty rows
+empties <- rowSums(commsmall[!names(commsmall)%in%c("site","time","Sample")])==0
+commsmall <- commsmall[which(!empties),]
+
+#str(commsmall)
+commA <- subset(commsmall,time == "May")
+commE <- subset(commsmall, time == "August")
+
+DCE <- subset(commE, commE$site == "DC")
+WIE <- subset(commE, commE$site == "WI")
+RPE <- subset(commE, commE$site == "RP")
+NBE <- subset(commE, commE$site == "NB")
+CBE <- subset(commE, commE$site == "CB")
+
+par(mfrow = c(1,5))
+
+### E PLOTS
+
+par(mar = c(4.5,4,1,1))
+
+DCEabun <- rankabundance(DCE[!names(DCE)%in%c("site","time","Sample")])
+rankplot(DCEabun, scale = 'abundance', main = "DC", cex.main = 1.5, ylim = c(0,9100), specnames = list(1:4), cex.lab = 1.5)
+
+par(mar = c(4.5,3,1,2))
+
+WIEabun <- rankabundance(WIE[!names(WIE)%in%c("site","time","Sample")])
+rankplot(WIEabun, scale = 'abundance', main = "WI", cex.main = 1.5, ylim = c(0,9100), yaxt = 'n', specnames = list(1:3), cex.lab = 1.5)
+
+RPEabun <- rankabundance(RPE[!names(RPE)%in%c("site","time","Sample")])
+rankplot(RPEabun, scale = 'abundance', main = "RP", cex.main = 1.5,ylim = c(0,9100), yaxt = 'n', specnames = list(1:5), cex.lab = 1.5)
+
+NBEabun <- rankabundance(NBE[!names(NBE)%in%c("site","time","Sample")])
+rankplot(NBEabun, scale = 'abundance', main = "NB", cex.main = 1.5,ylim = c(0,9100), yaxt = 'n', specnames = list(1:3), cex.lab = 1.5)
+
+CBEabun <- rankabundance(CBE[!names(CBE)%in%c("site","time","Sample")])
+rankplot(CBEabun, scale = 'abundance', main = "CB", cex.main = 1.5,ylim = c(0,9100), yaxt = 'n', specnames = list(1:2), cex.lab = 1.5)
+
+@
+\end{center}
+\caption{Rank abundance curves of most abundant epifauna for each site in August, 2012.}
+\label{fig:rankabunaug}
+\end{figure}
+
+\setkeys{Gin}{width=0.8\textwidth}
+
+\end{landscape}
+
+\subsubsection{Richness}
+\label{sec:resultrich}
+
+A total of 54 taxa belonging to 7 phyla were identified across all meadows from May to August 2012 (Table ~\ref{table:groups}). The most common phyla represented included \emph{Arthropoda}, \emph{Mollusca}, and \emph{Polychaeta}, containing 85\% of all individual organisms identified.  
+
+\begin{center}
+\begin{longtable}{|l|l|}
+\caption{List of organisms enumerated grouped by morpho-species.} 
+\label{table:groups} \\ \hline 
+
+\multicolumn{2}{ |c| }{Species \& Morpho-species} \\ \hline
+\endfirsthead
+
+\multicolumn{2}{c}%
+{{\bfseries \tablename\ \thetable{} -- continued from previous page}} \\
+\hline \multicolumn{2}{ |c| }{Morpho-species \& Species} \\ \hline
+\endhead
+
+\hline \multicolumn{2}{|r|}{{Continued on next page}} \\ \hline
+\endfoot
+
+\hline \hline
+\endlastfoot 
+
+\multirow{8}{*}{\emph{Amphipoda}} & \emph{Aoroides columbidae} \\
+ & \emph{Photis brevipes} \\
+ & \emph{Eogammarus confervicolus} \\
+ & \emph{Corophium sp.} \\ 
+ & \emph{Amphithoe sp.} \\
+ & Unidentified Amph 1 \\
+ & Unidentified Amph 2 \\ \hline
+ \emph{Cirripedia:Sessilia} & \emph{Cirripedia:Sessilia} \\ \hline
+ \emph{Bittium sp.} & \emph{Bittium sp.} \\ \hline
+ \emph{Ophiuroidea} & \emph{Ophiuroidea} \\ \hline
+ \emph{Caprella sp.} & \emph{Caprella sp.} \\ \hline
+ \emph{Cirolana sp.} & \emph{Cirolana sp.} \\ \hline
+ Unidentified~\emph{Bivalvia} & Unidentified~\emph{Bivalvia} \\ \hline
+ \emph{Clinocardium nuttallii} & \emph{Clinocardium nuttallii} \\ \hline
+ \emph{Copepoda} & \emph{Copepoda} \\ \hline
+ Unidentified~\emph{Decapoda} & Unidentified~\emph{Decapoda} \\ \hline
+ \emph{Euphausiacea} & \emph{Euphausiacea} \\ \hline
+ \emph{Haminoea} & \emph{Haminoea} \\ \hline
+  \emph{Paguridae} & \emph{Paguridae} \\ \hline
+  \emph{Idotea resecata} & \emph{Idotea resecata} \\ \hline
+  \emph{Leptostraca} & \emph{Leptostraca} \\ \hline
+  \emph{Lottia pelta} & \emph{Lottia pelta} \\ \hline
+  \emph{Acari} & \emph{Acari} \\ \hline
+  \emph{Mytilus spp.} & \emph{Mytilus spp.} \\ \hline
+\multirow{2}{*}{\emph{Nematoda}} & Nematode A \\
+ & Nematode B \\ \hline
+ \emph{Nemertea} & \emph{Nemertea} \\ \hline
+ \emph{Pisaster ochraceus} & \emph{Pisaster ochraceus} \\ \hline
+ \emph{Olivella sp.} & \emph{Olivella sp.} \\ \hline
+ \emph{Ostracoda} & \emph{Ostracoda} \\ \hline
+ Unidentified Microarthropod & Unidentified Microarthropod \\ \hline
+ \emph{Paracerceis sp.} & \emph{Paracerceis sp.} \\ \hline
+ \emph{Phyllaplysia taylori} & \emph{Phyllaplysia taylori} \\ \hline
+\multirow{9}{*}{\emph{Nereidae}} & Nereid A \\
+ & Nereid B \\
+ & Nereid C \\
+ & Nereid D \\
+ & Nereid E \\
+ & Nereid F \\
+ & Nereid G \\
+ & Nereid H \\
+ & Nereid I \\ \hline
+ \emph{Pugettia spp.} & \emph{Pugettia spp.} \\ \hline
+ \emph{Pycnogonida} & \emph{Pycnogonida} \\ \hline
+ \emph{Chlamys spp.} & \emph{Chlamys spp.} \\ \hline
+\multirow{3}{*}{Shrimp} & \emph{Eualus spp.} \\
+ & \emph{Pandalidae} \\
+ & Unidentified~\emph{Caridea} \\ \hline
+\multirow{2}{*}\emph{Gastropoda} & \emph{Margarites spp.} \\
+ & \emph{Lacuna spp.} \\ \hline
+ \emph{Solaster sp.} & \emph{Solaster sp.} \\ \hline
+ \emph{Strongylocentrotus spp.} & \emph{Strongylocentrotus spp.} \\ \hline
+ \emph{Tanaidacea} & \emph{Tanaidacea} \\ \hline
+ Tubeworm & Tubeworm \\
+\end{longtable}
+\end{center}
+
+\begin{figure}[H]
+\begin{center}
+<<label = fig:aggrich, echo = FALSE, fig = TRUE, results = HIDE, height = 8>>=
+##figure of raw richness data
+
+# richness of collapsed morphospecies
+
+commsmall <- read.csv("smallsieved.csv")
+
+comm <- commsmall
+
+#reorder factors
+comm$site <- factor(comm$site, levels = c("DC", "WI", "RP", "NB", "CB")) 
+comm$time <- factor(comm$time, levels = c("May","August"))
+
+#make presence/absence matrix and add up for richness
+presabscomm <- comm 
+presabscomm[presabscomm > 0] <- 1
+presabscomm$richness <- rowSums(presabscomm[!names(presabscomm)%in%c("site","time","Sample","div")])
+
+rich.lm <- lm(richness ~ site*time, data = presabscomm)
+#shapiro.test(rich.lm$residuals)
+#  Shapiro-Wilk normality test
+
+#data:  rich.lm$residuals
+#W = 0.9738, p-value = 0.003851
+
+rich.glm <- glm(richness ~ site*time, data = presabscomm, family="poisson")
+
+#anova(rich.glm, test = "Chi")
+
+#Analysis of Deviance Table
+
+#Model: poisson, link: log
+
+#Response: richness
+
+#Terms added sequentially (first to last)
+
+#          Df Deviance Resid. Df Resid. Dev  Pr(>Chi)    
+#NULL                        159     271.82              
+#site       4   24.163       155     247.66 7.410e-05 ***
+#time       1   55.585       154     192.07 8.949e-14 ***
+#site:time  4   12.816       150     179.26   0.01221 *  
+#---
+#Signif. codes:  0 ‘***’ 0.001 ‘**’ 0.01 ‘*’ 0.05 ‘.’ 0.1 ‘ ’ 1
+
+richa <- subset(presabscomm, time == "May")
+riche <- subset(presabscomm, time == "August")
+
+richa.glm <- glm(richness ~ site, data = richa, family = "poisson")
+richa.tuk <- glht(richa.glm, linfct = mcp(site = "Tukey"))
+#summary(richa.tuk)
+#   Simultaneous Tests for General Linear Hypotheses
+
+#Multiple Comparisons of Means: Tukey Contrasts
+
+#Fit: glm(formula = richness ~ site * time, family = "poisson", data = presabscomm)
+
+#Linear Hypotheses:
+#             Estimate Std. Error z value Pr(>|z|)
+#WI - DC == 0  0.28439    0.15185   1.873    0.332
+#RP - DC == 0  0.07599    0.15923   0.477    0.989
+#NB - DC == 0  0.20187    0.15463   1.305    0.687
+#CB - DC == 0 -0.02667    0.16331  -0.163    1.000
+#RP - WI == 0 -0.20840    0.14865  -1.402    0.626
+#NB - WI == 0 -0.08252    0.14371  -0.574    0.979
+#CB - WI == 0 -0.31106    0.15302  -2.033    0.250
+#NB - RP == 0  0.12588    0.15149   0.831    0.921
+#CB - RP == 0 -0.10265    0.16034  -0.640    0.968
+#CB - NB == 0 -0.22853    0.15578  -1.467    0.583
+#(Adjusted p values reported -- single-step method)
+
+#riche.glm <- glm(richness ~ site, data = riche, family = "poisson")
+#riche.tuk <- glht(riche.glm, linfct = mcp(site = "Tukey"))
+#summary(riche.tuk)
+#   Simultaneous Tests for General Linear Hypotheses
+
+#Multiple Comparisons of Means: Tukey Contrasts
+
+#Fit: glm(formula = richness ~ site, family = "poisson", data = riche)
+
+#Linear Hypotheses:
+#             Estimate Std. Error z value Pr(>|z|)    
+#WI - DC == 0  0.36772    0.11589   3.173  0.01318 *  
+#RP - DC == 0 -0.04879    0.12755  -0.383  0.99543    
+#NB - DC == 0 -0.27193    0.13547  -2.007  0.26068    
+#CB - DC == 0  0.16093    0.12122   1.328  0.67236    
+#RP - WI == 0 -0.41651    0.11759  -3.542  0.00368 ** 
+#NB - WI == 0 -0.63966    0.12614  -5.071  < 0.001 ***
+#CB - WI == 0 -0.20679    0.11069  -1.868  0.33290    
+#NB - RP == 0 -0.22314    0.13693  -1.630  0.47651    
+#CB - RP == 0  0.20972    0.12284   1.707  0.42760    
+#CB - NB == 0  0.43286    0.13105   3.303  0.00835 ** 
+#---
+#Signif. codes:  0 ‘***’ 0.001 ‘**’ 0.01 ‘*’ 0.05 ‘.’ 0.1 ‘ ’ 1
+#(Adjusted p values reported -- single-step method)
+
+n.groups <- 5 
+
+# comparison matrix- rows are panels, columns are groups
+# these are computed elsewhere
+comparison.matrixaggraw <- rbind(
+  c('','','','',''),
+  c('AB','B','AB','A','B')
+)
+
+aggrich <- bwplot(richness~site|time, data = presabscomm, ylab=list(label="# of Species", fontsize = 15), xlab = "", aspect = 1.4,
+       subscripts=TRUE, notch=FALSE, ylim = c(-1,20),
+       strip=TRUE, scales = list(x = list(draw = FALSE)),
+       par.settings=list(plot.symbol=list(col=1, cex=0.75), 
+                         box.dot=list(cex=0.75), box.rectangle=list(col=1), box.umbrella=list(col=1, lty = 1),
+                         layout.heights=list(top.padding=0.5, bottom.padding=-1)),
+       panel=function(x, y, n=n.groups, cm=comparison.matrixaggraw, ...) {
+         # basic bwplot
+         panel.bwplot(x, y, ...)
+         # compute offset from top of 'umbrella'
+         y.offset <- tapply(y, x, function(i) boxplot.stats(i)$stats[5])
+         # add text just above offset, by panel number
+         panel.text(1:n, y.offset + 1, cm[packet.number(), ], font=2)
+       })
+
+
+
+# rarefied richness of collapsed morphospecies
+
+commsmall <- read.csv("smallsieved.csv")
+
+comm <- commsmall
+
+#reorder factors
+comm$site <- factor(comm$site, levels = c("DC", "WI", "RP", "NB", "CB")) 
+comm$time <- factor(comm$time, levels = c("May","August"))
+
+#min(rowSums(comm[,-c(1:3)]))
+a <- subset(comm,rowSums(comm[,-c(1:3)])>10)
+#min(rowSums(a[,-c(1:3)]))
+
+sr_all <- rarefy(a[,-c(1:3)],min(rowSums(a[,-c(1:3)])))
+
+df_all <-  data.frame(a[,c(1:2)],sr_all)
+names(df_all) <-  c("site","time","rarefied")
+
+df_all$site <- factor(df_all$site, levels= c(c("DC", "WI", "RP",
+                                               "NB", "CB")))
+comm$time <- factor(comm$time, levels = c("May","August"))
+
+rarerich.lm <- lm(rarefied ~ site*time, data = df_all)
+
+#plot(rarerich.lm)
+#shapiro.test(rarerich.lm$residuals)
+#  Shapiro-Wilk normality test
+
+#data:  rarerich.lm$residuals
+#W = 0.9824, p-value = 0.05607
+
+rarerich.aov <- anova(rarerich.lm)
+
+#Analysis of Variance Table
+
+#Response: rarefied
+#           Df Sum Sq Mean Sq F value    Pr(>F)    
+#site        4 62.920 15.7301 22.8817 1.706e-14 ***
+#time        1  0.005  0.0048  0.0070    0.9336    
+#site:time   4 19.775  4.9437  7.1914 2.755e-05 ***
+#Residuals 137 94.181  0.6875                      
+#---
+#Signif. codes:  0 ‘***’ 0.001 ‘**’ 0.01 ‘*’ 0.05 ‘.’ 0.1 ‘ ’ 1
+
+rarerich.aov <- aov(rarefied ~ site*time, data = df_all)
+rich.tuk <- TukeyHSD(rarerich.aov)
+
+n.groups <- 5
+
+# comparison matrix- rows are panels, columns are groups
+# these are computed elsewhere
+comparison.matrixaggrare <- rbind(
+  c('A','B','A','A','A'),
+  c('A','BC','AB','B','C')
+)
+
+aggrare <- bwplot(rarefied~site|time, data = df_all, ylab=list(label="Rarefied Richness", fontsize = 15), xlab = list(label = "Sites", fontsize = 15), aspect = 1.4, 
+      subscripts=TRUE, notch=FALSE, 
+      strip=FALSE, scales = list(x = list(draw = TRUE)),
+       par.settings=list(plot.symbol=list(col=1, cex=0.75), 
+                         box.dot=list(cex=0.75), box.rectangle=list(col=1), box.umbrella=list(col=1, lty = 1),
+                         layout.heights=list(top.padding=-3, bottom.padding=-1)),
+       ylim = c(1,11),
+       panel=function(x, y, n=n.groups, cm=comparison.matrixaggrare, ...) {
+         # basic bwplot
+         panel.bwplot(x, y, ...)
+         # compute offset from top of 'umbrella'
+         y.offset <- tapply(y, x, function(i) boxplot.stats(i)$stats[5])
+         # add text just above offset, by panel number
+         panel.text(1:n, y.offset + 1, cm[packet.number(), ], font=2)
+       })
+
+print(aggrich, position = c(0,0.5,1,1), more = TRUE)
+print(aggrare, position = c(0,0,1,0.55))
+ltext(210,525,label = "A", cex = 2)
+ltext(210,275,label = "B",cex = 2)
+
+
+@
+\end{center}
+\caption{Mean raw richness (A) and rarefied richness (B) across all sites from May and August 2012.  Pairwise comparisons were made within each time among sites (Raw richness: Tests for General Linear Hypotheses, p < 0.05, Rarefied richness: Tukey, p < 0.05).}
+\label{fig:aggrich} 
+\end{figure}
+
+Mean richness values per within-meadow sample ranged from 4.63-6.31 / 0.28 m\squared in May, to 6.00-11.38 / 0.28 m\squared in August (Figure ~\ref{fig:aggrich}). Minimum and maximum richness values for within-meadow samples ranged from 0-3 / 0.28 m\squared and 7-10 / 0.28 m\squared in May, to 0-7 and 8-16 in August, respectively (Table ~\ref{table:aggrich}). Rarefaction standardized richness estimates to the lowest observed abundance using a cut-off of 10 individuals minimum per sample for each time period. Rarefaction changed the relative mean richness estimates among meadows, reflecting  patterns in richness and abundance across the five meadows sampled (Figure ~\ref{fig:aggrich}). Rarefied richness varied significantly among meadows, but no differences were detected through time (Table ~\ref{table:aggrare}).
+
+<<label = table:aggrich, echo = FALSE, results = tex>>=
+
+commsmall <- read.csv("smallsieved.csv")
+
+comm <- commsmall
+
+#reorder factors
+comm$site <- factor(comm$site, levels = c("DC", "WI", "RP", "NB", "CB")) 
+comm$time <- factor(comm$time, levels = c("May","August"))
+
+#make presence/absence matrix and add up for richness
+presabscomm <- comm 
+presabscomm[presabscomm > 0] <- 1
+presabscomm$richness <- rowSums(presabscomm[!names(presabscomm)%in%c("site","time","Sample","div")])
+
+rich.glm <- glm(richness ~ site*time, data = presabscomm,family="poisson")
+
+#anova of richness
+presabscomm.aov <- anova(rich.glm, test = "Chi")
+presabscomm.aov <- as.matrix(presabscomm.aov)
+
+print(xtable(presabscomm.aov, caption = "ANODE-Chi of species richness by site and time.", label = "table:aggrich", digits = c(0,0,2,2,3,4), table.placement = "tbp"), caption.placement = "top")
+@
+
+<<label = table:aggrare, echo = FALSE, results = tex>>=
+
+##figure of rarefied richness data
+
+commsmall <- read.csv("smallsieved.csv")
+
+comm <- commsmall
+
+#reorder factors
+comm$site <- factor(comm$site, levels = c("DC", "WI", "RP", "NB", "CB")) 
+comm$time <- factor(comm$time, levels = c("May","August"))
+
+#min(rowSums(comm[,-c(1:3)]))
+a <- subset(comm,rowSums(comm[,-c(1:3)])>10)
+#min(rowSums(a[,-c(1:3)]))
+
+sr_all <- rarefy(a[,-c(1:3)],min(rowSums(a[,-c(1:3)])))
+
+df_all <-  data.frame(a[,c(1:2)],sr_all)
+names(df_all) <-  c("site","time","rarefied")
+
+df_all$site <- factor(df_all$site, levels= c(c("DC", "WI", "RP",
+                                               "NB", "CB")))
+comm$time <- factor(comm$time, levels = c("May","August"))
+
+rarerich.lm <- lm(rarefied ~ site*time, data = df_all)
+
+#anova of richness
+rarerich.aov <- anova(rarerich.lm)
+rarerich.aov <- as.matrix(rarerich.aov)
+
+print(xtable(rarerich.aov, caption = "ANOVA of rarefied species richness by site and time.", label = "table:aggrare", digits = c(0,0,2,2,3,4), table.placement = "tbp"), caption.placement = "top")
+@
+
+\subsubsection{Diversity \& Evenness}
+ 
+\paragraph{Diversity Within \& Among Meadows} 
+
+Diversity varied among sites as well as within sites through time (Figure~\ref{fig:aggdiv}). Highest mean diversity was observed at WI in May, lowest at DC, RP, and NB, with CB intermediate between sites. In August, diversity at the most spatially distant sites was different.  CB was ~30\% higher than at DC, with all other sites falling intermediate between the two, indicating that the relative diversity of meadows changed across space through time. However, site diversity did not change predictably through time, indicated by an interaction between site and time in analysis (Table~\ref{table:aggdiv}). 
+
+\begin{figure}[H]
+\begin{center}
+<<label = fig:aggdiv, echo = FALSE, fig = TRUE, results = HIDE, height = 6>>=
+
+#### Collapsed morpho species diversity
+
+commsmall <- read.csv("smallsieved.csv")
+
+#reorder factors
+commsmall$site <- factor(commsmall$site, levels = c("DC", "WI", "RP", "NB", "CB")) 
+commsmall$time <- factor(commsmall$time, levels = c("May","August"))
+
+ commag <- commsmall
+
+#create simpsons diversity column
+commag$div <- diversity(commag[!names(commag)%in%c("site","time","Sample")], 
+                      index = "simpson")
+
+#simplify diversity dataframe
+commdivag <- commag[,c(1,2,40)]
+
+n.groups <- 5
+
+# comparison matrix- rows are panels, columns are groups
+# these are computed elsewhere
+comparison.matrixag <- rbind(
+  c('AB','C','A','AB','B'),
+  c('A','B','AB','AB','C')
+)
+
+agdiv <- bwplot(div~site|time, data = commdivag, xlab = "Sites", ylab = "Simpson's Index",
+       subscripts=TRUE, notch=FALSE,
+       strip=TRUE, aspect = 1.35, scales = list(x = list(draw = TRUE)),
+       par.settings=list(plot.symbol=list(col=1, cex=0.75), 
+                         box.dot=list(cex=0.75), box.rectangle=list(col=1), box.umbrella=list(col=1, lty = 1)),
+       panel=function(x, y, n=n.groups, cm=comparison.matrixag, ...) {
+         # basic bwplot
+         panel.bwplot(x, y, ...)
+         # compute offset from top of 'umbrella'
+         y.offset <- tapply(y, x, function(i) boxplot.stats(i)$stats[5])
+         # add text just above offset, by panel number
+         panel.text(1:n, y.offset + 0.03, cm[packet.number(), ], font=2)
+       })
+
+print(agdiv)
+@
+\end{center}
+\caption{Mean diversity per 0.28 m\squared plot across all sites in May and August 2012.}
+\label{fig:aggdiv}
+\end{figure}
+
+<<label = table:aggdiv, echo = FALSE, results = tex>>=
+
+####ANOVA of collapsed morphospecies diversity
+
+commsmall <- read.csv("smallsieved.csv")
+
+#reorder factors
+commsmall$site <- factor(commsmall$site, levels = c("DC", "WI", "RP", "NB", "CB")) 
+comm <- commsmall
+
+#identify and remove empty rows
+empties <- rowSums(comm[!names(comm)%in%c("site","time","Sample")])==0
+comm <- comm[which(!empties),]
+
+#create simpsons diversity column
+comm$div <- diversity(comm[!names(comm)%in%c("site","time","Sample")], 
+                      index = "simpson")
+
+###Anova of diversity RAW
+div.lm <- lm(div~ site*time, data = comm)
+
+#plot(div.lm)
+#shapiro.test(div.lm$residuals)
+#  Shapiro-Wilk normality test
+
+#data:  div.lm$residuals
+#W = 0.9635, p-value = 0.0004268
+
+comm$offset <- 100
+
+comm$div <- round(comm$div, 2)
+
+comm$scaled.div <- comm$div * 100
+
+div.glm <- glm(scaled.div ~ site*time + offset(offset), data = comm, family = "poisson")
+div.aov <- anova(div.glm, test = "Chi")
+div.aov <- as.matrix(div.aov)
+
+diva <- subset(comm, time == "May")
+dive <- subset(comm, time == "August")
+
+diva.glm <- glm(scaled.div ~ site + offset(offset), data = diva, family = "poisson")
+diva.tuk <- glht(diva.glm, linfct = mcp(site = "Tukey"))
+#summary(diva.tuk)
+#   Simultaneous Tests for General Linear Hypotheses
+
+#Multiple Comparisons of Means: Tukey Contrasts
+
+#Fit: glm(formula = scaled.div ~ site + offset(offset), family = "poisson", 
+#    data = diva)
+
+#Linear Hypotheses:
+#             Estimate Std. Error z value Pr(>|z|)    
+#WI - DC == 0  0.24731    0.04621   5.352  < 0.001 ***
+#RP - DC == 0 -0.09221    0.05101  -1.808  0.36817    
+#NB - DC == 0 -0.01937    0.04921  -0.394  0.99492    
+#CB - DC == 0  0.08119    0.04877   1.665  0.45531    
+#RP - WI == 0 -0.33952    0.04836  -7.020  < 0.001 ***
+#NB - WI == 0 -0.26668    0.04646  -5.740  < 0.001 ***
+#CB - WI == 0 -0.16612    0.04600  -3.612  0.00292 ** 
+#NB - RP == 0  0.07284    0.05123   1.422  0.61289    
+#CB - RP == 0  0.17340    0.05081   3.413  0.00569 ** 
+#CB - NB == 0  0.10056    0.04901   2.052  0.24086    
+#---
+#Signif. codes:  0 ‘***’ 0.001 ‘**’ 0.01 ‘*’ 0.05 ‘.’ 0.1 ‘ ’ 1
+#(Adjusted p values reported -- single-step method)
+
+dive.glm <- glm(scaled.div ~ site + offset(offset), data = dive, family = "poisson")
+dive.tuk <- glht(dive.glm, linfct = mcp(site = "Tukey"))
+#summary(dive.tuk)
+# Simultaneous Tests for General Linear Hypotheses
+
+#Multiple Comparisons of Means: Tukey Contrasts
+
+#Fit: glm(formula = scaled.div ~ site + offset(offset), family = "poisson", 
+#    data = dive)
+
+#Linear Hypotheses:
+#             Estimate Std. Error z value Pr(>|z|)    
+#WI - DC == 0  0.19409    0.04684   4.143   <0.001 ***
+#RP - DC == 0  0.08079    0.05069   1.594   0.5004    
+#NB - DC == 0  0.09884    0.04864   2.032   0.2499    
+#CB - DC == 0  0.31878    0.04559   6.993   <0.001 ***
+#RP - WI == 0 -0.11330    0.04855  -2.334   0.1337    
+#NB - WI == 0 -0.09524    0.04641  -2.052   0.2405    
+#CB - WI == 0  0.12470    0.04320   2.887   0.0317 *  
+#NB - RP == 0  0.01805    0.05029   0.359   0.9964    
+#CB - RP == 0  0.23799    0.04734   5.027   <0.001 ***
+#CB - NB == 0  0.21994    0.04514   4.872   <0.001 ***
+#---
+#Signif. codes:  0 ‘***’ 0.001 ‘**’ 0.01 ‘*’ 0.05 ‘.’ 0.1 ‘ ’ 1
+#(Adjusted p values reported -- single-step method)
+
+#effect size of time:
+#tapply(comm$div, comm$time, mean)
+#        A         E 
+# 0.5492631 0.6019734 
+#0.6019734/0.5492631
+#[1] 1.095965
+
+#effect size between DC and CB time E
+#commE <- subset(comm, time == "E")
+#tapply(commE$div, commE$site, mean)
+#      DC        WI        RP        NB        CB 
+#0.5210868 0.6305973 0.5630175 0.5728880 0.7131555 
+#0.7131555/0.5210868
+#[1] 1.368593
+
+print(xtable(div.aov, caption = "ANODE-Chi of species diversity measured as Simpson's Index.", label = "table:aggdiv", digits = c(0,0,2,2,3,4), table.placement = "tbp"), caption.placement = "top")
+
+#div.aov <- aov(div~site*time, data = commdiv)
+#div.tuk <- TukeyHSD(div.aov)
+#div.tuk
+
+@
+
+\paragraph{Evenness}
+
+Evenness varied among sites through time (Figure~\ref{fig:aggeven}). In May WI and CB had higher evenness measures than DC, RP, or NB. However, in August CB and NB had higher values than DC, WI, and RP.
+
+\begin{figure}[H]
+\begin{center}
+<<label = fig:aggeven, echo = FALSE, fig = TRUE, results = HIDE>>=
+
+commsmall <- read.csv("smallsieved.csv")
+
+#reorder factors
+commsmall$site <- factor(commsmall$site, levels = c("DC", "WI", "RP", "NB", "CB")) 
+commsmall$time <- factor(commsmall$time, levels = c("May","August"))
+#identify and remove empty rows
+
+empties <- rowSums(commsmall[!names(commsmall)%in%c("site","time","Sample")])==0
+commsmall <- commsmall[which(!empties),]
+
+commsmall$even <- even(commsmall[!names(commsmall)%in%c("site","time","Sample")])
+
+n.groups <- 5
+
+# comparison matrix- rows are panels, columns are groups
+# these are computed elsewhere
+comparison.matrixag <- rbind(
+  c('A','B','C','AC','B'),
+  c('A','A','A','B','B')
+)
+
+ageven <- bwplot(even~site|time, data = commsmall, xlab = "Sites", ylab = "Simpson's Evenness",
+       subscripts=TRUE, notch=FALSE,
+       strip=TRUE, aspect = 1.35, scales = list(x = list(draw = TRUE)),
+       par.settings=list(plot.symbol=list(col=1, cex=0.75), 
+                         box.dot=list(cex=0.75), box.rectangle=list(col=1), box.umbrella=list(col=1, lty = 1)),
+       panel=function(x, y, n=n.groups, cm=comparison.matrixag, ...) {
+         # basic bwplot
+         panel.bwplot(x, y, ...)
+         # compute offset from top of 'umbrella'
+         y.offset <- tapply(y, x, function(i) boxplot.stats(i)$stats[5])
+         # add text just above offset, by panel number
+         panel.text(1:n, y.offset + 0.03, cm[packet.number(), ], font=2)
+       })
+
+print(ageven)
+
+@
+\end{center}
+\caption{Mean community evenness per 0.28 m\squared plot of all sites in May and August.}
+\label{fig:aggeven}
+\end{figure}
+
+<<label = table:aggeven, echo = FALSE, results = tex>>=
+
+commsmall <- read.csv("smallsieved.csv")
+
+#reorder factors
+commsmall$site <- factor(commsmall$site, levels = c("DC", "WI", "RP", "NB", "CB")) 
+commsmall$time <- factor(commsmall$time, levels = c("May","August"))
+#identify and remove empty rows
+
+empties <- rowSums(commsmall[!names(commsmall)%in%c("site","time","Sample")])==0
+commsmall <- commsmall[which(!empties),]
+
+####EVENNESS
+
+evenness <- even(commsmall[!names(commsmall)%in%c("site","time","Sample")])
+site <- commsmall$site
+time <- commsmall$time
+evensmall <- data.frame(evenness, site, time)
+
+#ANOVA
+
+even.lm <- lm(evenness ~ site*time, data = evensmall)
+
+#shapiro.test(even.lm$residuals)
+#  Shapiro-Wilk normality test
+
+#data:  even.lm$residuals
+#W = 0.9785, p-value = 0.01644
+
+evensmall$offset <- 100
+
+evensmall$evenness <- round(evensmall$evenness, 2)
+
+evensmall$scaled.even <- evensmall$evenness * 100
+
+even.glm <- glm(scaled.even ~ site*time + offset(offset), data = evensmall, family = "poisson")
+even.aov <- anova(even.glm, test = "Chi")
+even.aov <- as.matrix(even.aov)
+
+evena <- subset(evensmall, time == "May")
+evene <- subset(evensmall, time == "August")
+
+evena.glm <- glm(scaled.even ~ site + offset(offset), data = evena, family = "poisson")
+evena.tuk <- glht(evena.glm, linfct = mcp(site = "Tukey"))
+#summary(evena.tuk)
+#   Simultaneous Tests for General Linear Hypotheses
+
+#Multiple Comparisons of Means: Tukey Contrasts
+
+#Fit: glm(formula = scaled.even ~ site + offset(offset), family = "poisson", 
+#    data = evena)
+
+#Linear Hypotheses:
+#             Estimate Std. Error z value Pr(>|z|)    
+#WI - DC == 0  0.17552    0.04834   3.631  0.00258 ** 
+#RP - DC == 0 -0.20676    0.05420  -3.815  0.00128 ** 
+#NB - DC == 0 -0.12864    0.05211  -2.469  0.09749 .  
+#CB - DC == 0  0.15672    0.04929   3.180  0.01267 *  
+#RP - WI == 0 -0.38228    0.05228  -7.313  < 0.001 ***
+#NB - WI == 0 -0.30416    0.05011  -6.070  < 0.001 ***
+#CB - WI == 0 -0.01880    0.04717  -0.399  0.99467    
+#NB - RP == 0  0.07812    0.05578   1.400  0.62646    
+#CB - RP == 0  0.36349    0.05315   6.838  < 0.001 ***
+#CB - NB == 0  0.28537    0.05103   5.592  < 0.001 ***
+#---
+#Signif. codes:  0 ‘***’ 0.001 ‘**’ 0.01 ‘*’ 0.05 ‘.’ 0.1 ‘ ’ 1
+#(Adjusted p values reported -- single-step method)
+
+evene.glm <- glm(scaled.even ~ site + offset(offset), data = evene, family = "poisson")
+evene.tuk <- glht(evene.glm, linfct = mcp(site = "Tukey"))
+#summary(evene.tuk)
+#   Simultaneous Tests for General Linear Hypotheses
+
+#Multiple Comparisons of Means: Tukey Contrasts
+
+#Fit: glm(formula = scaled.even ~ site + offset(offset), family = "poisson", 
+#    data = evene)
+
+#Linear Hypotheses:
+#              Estimate Std. Error z value Pr(>|z|)    
+#WI - DC == 0 -0.052225   0.067405  -0.775   0.9372    
+#RP - DC == 0 -0.053840   0.071316  -0.755   0.9426    
+#NB - DC == 0  0.383796   0.061807   6.210   <0.001 ***
+#CB - DC == 0  0.520951   0.059384   8.773   <0.001 ***
+#RP - WI == 0 -0.001615   0.072143  -0.022   1.0000    
+#NB - WI == 0  0.436022   0.062759   6.948   <0.001 ***
+#CB - WI == 0  0.573176   0.060374   9.494   <0.001 ***
+#NB - RP == 0  0.437637   0.066942   6.538   <0.001 ***
+#CB - RP == 0  0.574792   0.064712   8.882   <0.001 ***
+#CB - NB == 0  0.137155   0.054053   2.537   0.0814 .  
+#---
+#Signif. codes:  0 ‘***’ 0.001 ‘**’ 0.01 ‘*’ 0.05 ‘.’ 0.1 ‘ ’ 1
+#(Adjusted p values reported -- single-step method)
+
+print(xtable(even.aov, caption = "ANODE-Chi of species evenness by site and time.", label = "table:aggeven", digits = c(0,0,2,2,3,4), table.placement = "tbp"), caption.placement = "top")
+@
+
+\paragraph{Beta Diversity}
+
+Beta diversity varied among sites within and between time periods (Figure~\ref{fig:aggbeta}). DC and RP tended to be more similar in May and August, while WI, NB, and CB were distinct in May, becoming more simliar in August.
+
+\begin{figure}[H]
+\begin{center}
+<<label = fig:aggbeta, echo = FALSE, fig = TRUE, results = HIDE, height = 5>>=
+
+par(mfrow = c(1,2))
+
+
+##########
+commsmall <- read.csv("smallsieved.csv")
+
+#reorder factors
+commsmall$site <- factor(commsmall$site, levels = c("DC", "WI", "RP", "NB", "CB")) 
+commsmall$time <- factor(commsmall$time, levels = c("May","August"))
+#identify and remove empty rows
+
+empties <- rowSums(commsmall[!names(commsmall)%in%c("site","time","Sample")])==0
+commsmall <- commsmall[which(!empties),]
+
+commsmallA <- subset(commsmall, time == "May")
+commsmallE <- subset(commsmall, time == "August")
+
+
+braycommsmallA <- vegdist(commsmallA[!names(commsmall)%in%c("site","time","Sample")], method = "bray")
+locA <- commsmallA$site
+braysmallA <- with(commsmallA,betadisper(braycommsmallA,locA))
+#scores(braysmallA)
+#TukeyHSD(braysmallA)
+par(mar = c(3,2,0,0.5))
+plot(braysmallA, main = "", ylim = c(-0.4,0.5), xlim = c(-0.5,0.5))
+text(0.4, 0.8, "A", cex = 2)
+text(-0.4, -0.1, "DC")
+text(-0.25, 0.25, "RP")
+text(-0.2, -0.4, "WI")
+text(0.47, -0.25, "NB")
+text(0.3, 0.45, "CB")
+#eigA <- braysmallA$eig
+#eigA/sum(eigA)
+#PCoA1 = 0.37, PCoA2 = 0.15
+
+braycommsmallE <- vegdist(commsmallE[!names(commsmall)%in%c("site","time","Sample")], method = "bray")
+locE <- commsmallE$site
+braysmallE <- with(commsmallE,betadisper(braycommsmallE,locE))
+#scores(braysmallE)
+#TukeyHSD(braysmallE)
+plot(braysmallE, main = "", ylim = c(-0.4,0.5), xlim = c(-0.5,0.5), yaxt = 'n')
+text(0.4, 0.8, "B", cex = 2)
+text(-0.45, 0.3, "DC")
+text(-0.25, -0.15, "RP")
+text(-0.18, -0.45, "WI")
+text(0.45, -0.2, "CB")
+text(0.35, 0.35, "NB")
+#eig <- braysmallE$eig
+#eig/sum(eig)
+#PCoA1 = 0.42, PCoA2 = 0.19
+
+@
+\end{center}
+\caption{Beta diversity as Bray-Curtis distance for each site in May (A) and August (B). Red points represent a multidimensional centroid for each site, blue vectors are distance of sampled 0.28 m\squared plots within site to the centroid. Axes are dimensionless.}
+\label{fig:aggbeta}
+\end{figure}
+
+Multivariate distance of each sample to a multidimensional centroid generated for each site indicated variation in mean beta diversity within each site and time. In May, beta diversity as variation in community composition and abundance was significantly higher at WI than at DC, RP, or CB (Figure~\ref{fig:aggbetabar}). In August, variation increased across sites from DC to CB, with the greatest differences observed between the most spatially distant sites, DC and CB. 
+
+\begin{figure}[H]
+\begin{center}
+<<label = fig:aggbetabar, fig = TRUE, echo = FALSE, results = HIDE>>=
+
+#uses analdata from fig:beta
+par(mfrow = c(1,2))
+par(mar = c(4,4.1,0,0.5))
+
+boxplot(braysmallA, main = "", ylim = c(0.0,0.8), lty = 1, ylab = "Distance to Centroid", cex.lab = 1.2)
+text(5, 0.8, "A", cex = 1.5)
+text(1,0.45, "A")
+text(2,0.63, "B")
+text(3,0.48, "A")
+text(4,0.63, "AB")
+text(5,0.52, "A")
+par(mar = c(4,2,0,2.5))
+boxplot(braysmallE, main = "", yaxt = 'n', ylim = c(0.0,0.8), lty =1, ylab = NULL)
+text(4.5, 0.8, "B", cex = 1.5)
+text(1,0.5, "A")
+text(2,0.65, "AB")
+text(3,0.8, "AB")
+text(4,0.48, "AB")
+text(5,0.7, "B")
+mtext("     Sites", side = 1, line = -1, outer = TRUE, cex = 1.5)
+
+@
+\end{center}
+\caption{Mean distance to centroid, Bray-Curtis beta diversity of all sites in May (A) and August (B). Differences in variation among sites within each time detected with post-hoc Tukey (p < 0.05). }
+\label{fig:aggbetabar}
+\end{figure}
+
+\subsubsection{Community Composition}
+
+Community composition varied among sites through time (Figure~\ref{fig:aggbeta}). Composition was unique within sites, and changed differently through time depending on the site observed (Table~\ref{table:AggPerm}). SIMPER analysis paired with species rank abundance curves (see section~\ref{sec:abunresult}) indicated that often the most abundant organisms were responsible for driving differences in composition among sites and times (Table~\ref{table:aggsimper}). ~\emph{Caprella sp.}, \emph{Amphipoda}, \emph{Mytilus spp.}, \emph{Nereidae}, and \emph{Phyllaplysia taylori} were included in the top five contributors to variation in epifaunal composition for at least half of all pairwise site comparisons. 
+
+% Table generated by Excel2LaTeX from sheet 'Sheet1'
+
+\begin{center}
+\begin{table}
+  \caption{PERMANOVA of community composition.}
+    \label{table:AggPerm}%
+    \begin{tabular}{rccccccr}
+    \hline
+    Source &  df   &     SS &     MS & Pseudo-F & P(perm) &  Unique perms & \multicolumn{1}{c}{ P(MC)} \\ \hline
+    site  & 4     & 41.817 & 10.454 & 2.2608 & 0.0219 & 7239  & 0.0138 \\
+    time  & 1     & 19.299 & 19.299 & 42.687 & 0.0001 & 9940  & 0.0001 \\
+    site x time & 4     & 18.497 & 4.6242 & 10.228 & 0.0001 & 9867  & 0.0001 \\
+    Res   & 150   & 67.815 & 0.4521 &       &       &       & \multicolumn{1}{c}{} \\
+    Total & 159   & 147.43 &       &       &       &       & \multicolumn{1}{c}{} \\
+    \hline
+    \end{tabular}%
+\end{table}%
+\end{center}
+
+
+  \begin{figure}[H]
+\label{fig:aggMDS}
+\begin{center}
+\includegraphics[width = 6in]{AggMDS.png}
+\end{center}
+\caption{nMDS of epifaunal communities across all sites in May and August.}
+\end{figure}
+
+\subsection{Quantifying Relationships Between Structural Parameters \& Epifaunal Communities}
+
+Total abundance of organisms increased with increasing mean seagrass shoot density per site and time (Figure~\ref{fig:densabun}). Best model fit was linear regression (Table~\ref{table:AICdens}.
+
+\begin{figure}[H]
+\begin{center}
+<<label = fig:densabun, echo = FALSE, fig = TRUE, results = HIDE>>=
+
+dens <- read.csv("Dens.csv")
+
+#reorder factors
+dens$site <- factor(dens$site, levels = c("DC", "WI", "RP", "NB", "CB")) 
+dens$time <- factor(dens$time, levels = c("May","August"))
+
+alldens.lm <- lm(Log.Abun ~ Avg.Dens, data = dens)
+#AIC(alldens.lm)
+#[1] 20.06195
+#alldens.lme <- lme(Log.Abun ~ Avg.Dens, random= ~ time | site, data = dens)
+#summary(alldens.lme)
+#alldens.aov <- anova(alldens.lme)
+#            numDF denDF  F-value p-value
+#(Intercept)     1     4 3183.317  <.0001
+#Avg.Dens        1     4   10.754  0.0305
+
+alldens.lme <- lme(Log.Abun ~ Avg.Dens, random = ~1 | time, data = dens)
+#AIC(alldens.lme)
+#[1] 22.55892 
+
+#rsquared.glmm(list(alldens.lm))
+#  Class   Family  Marginal Conditional      AIC
+#1    lm Gaussian 0.2343969          NA 20.06195
+
+#AIC <- AIC(alldens.lm, alldens.lme)
+#AIC <- AIC$AIC
+#akaike.weights(AIC)
+#[1] 20.06195 22.55892
+#$deltaAIC
+#[1] 0.000000 2.496967
+
+#$rel.LL
+#[1] 1.0000000 0.2869396
+
+#$weights
+#[1] 0.7770372 0.2229628
+
+plot(Log.Abun ~ Avg.Dens, data = dens, xlab = "Mean Shoot Density", ylab = "Log Organismal Abundance")
+abline(alldens.lm)
+text(11,4.1, "p < 0.05")
+text(11,4, "r^2 = 0.23")
+
+@
+\end{center}
+\caption{Organismal abundance as a function of shoot density in 0.28m\squared plots.}
+\label{fig:densabun}
+\end{figure}
+
+\begin{center}
+\begin{table}
+  \caption{Akaike Information Criterion for density models.}
+  \label{table:AICdens}
+    \begin{tabular}{lccc}
+    \hline
+    Model & AIC & $\Delta$AIC & $\omega$AIC \\
+  \hline
+    log abundance ~ average density & 20.06 & 0 & 0.7770 \\
+    log abundance ~ average density, random = time & 22.56 & 2.50 & 0.2230 \\
+    \hline
+    \end{tabular}%
+\end{table}%
+\end{center}
+
+Total organismal abundance did not significantly increase with increasing leaf area index (Figure~\ref{fig:LAIabun}). Best model fit was linear regression (Table~\ref{table:AICLAI}).
+
+\begin{figure}[H]
+\begin{center}
+<<label = fig:LAIabun, echo = FALSE, fig = TRUE, results = HIDE>>=
+
+LAI <-  read.csv("LAI.csv")
+
+#reorder factors
+LAI$site <- factor(LAI$site, levels = c("DC", "WI", "RP", "NB", "CB")) 
+LAI$time <- factor(LAI$time, levels = c("May","August"))
+
+#plot(Org.Abun ~ Avg.Dens, data = dens)
+#plot(Log.Abun ~ Avg.Dens, data = dens)
+
+LAI.lm <- lm(Log.Abun ~ Avg.LAI, data = LAI)
+#AIC(LAI.lm)
+#[1] 18.94969
+
+LAI.lme <- lme(Log.Abun ~ Avg.LAI, random= ~ 1 | time, data = LAI)
+#AIC(LAI.lme)
+#[1] 35.42921
+
+LAI.lme2 <- lme(Log.Abun ~ Avg.LAI, random = ~ Avg.LAI | time, data = LAI)
+#AIC(LAI.lme2)
+#[1] 36.95017
+
+#rsquared.glmm(list(LAI.lm))
+#  Class   Family  Marginal Conditional      AIC
+#1    lm Gaussian 0.3149868          NA 18.94969
+
+#AIC <- AIC(LAI.lm, LAI.lme, LAI.lme2)
+#AIC <- AIC$AIC
+#akaike.weights(AIC)
+#[1] 18.94969 35.42921 36.95017
+#$deltaAIC
+#[1]  0.00000 16.47952 18.00047
+
+#$rel.LL
+#[1] 1.0000000000 0.0002639477 0.0001233806
+
+#$weights
+#[1] 0.9996128217 0.0002638455 0.0001233328
+
+LAI.aov <- anova(LAI.lm)
+#Analysis of Variance Table
+
+#Response: Log.Abun
+#          Df  Sum Sq Mean Sq F value Pr(>F)  
+#Avg.LAI    1 0.98292 0.98292  3.6786 0.0914 .
+#Residuals  8 2.13759 0.26720                 
+#---
+#Signif. codes:  0 ‘***’ 0.001 ‘**’ 0.01 ‘*’ 0.05 ‘.’ 0.1 ‘ ’ 1
+
+plot(Log.Abun ~ Avg.LAI, data = LAI, ylab = "Log Organismal Abundance:", xlab = "Mean Leaf Area")
+abline(LAI.lm)
+text(7000,4.1, "p = 0.08")
+text(7000,4, "r^2 = 0.31")
+
+@
+\end{center}
+\caption{Organismal abundance as a function of leaf area in 0.28m\squared plots.}
+\label{fig:LAIabun}
+\end{figure}
+
+\begin{center}
+\begin{table}
+  \caption{Akaike Information Criterion for LAI models.}
+  \label{table:AICLAI}
+    \begin{tabular}{lccc}
+    \hline
+    Model & AIC & $\Delta$AIC & $\omega$AIC \\
+  \hline
+    log abundnace ~ average LAI & 18.95 & 0 & 0.9996 \\
+    log abundnace ~ average LAI, random = time & 35.43 & 16.48 & 0.0003 \\
+    log abundnace ~ average LAI, random = average LAI | time & 36.95 & 18.00 & 0.0001 \\
+    \hline
+    \end{tabular}%
+\end{table}%
+\end{center}
+
+Mean leaf area and density did not correlate with any other community measures including rarefied richness, diversity, or evenness.
+
+<<label = table:commetrics, echo = FALSE, results = HIDE>>=
+              
+commetrics <- read.csv("commetrics.csv")
+              
+commetricsMay <- subset(commetrics, time == "May")
+commetricsAug <- subset(commetrics, time == "August")
+
+              #ABUNDANCE
+#NS abunmay.lm <- lm(abun ~ dens*lai, data = commetricsMay)
+#             summary(abunmay.lm)
+#              summary(aov(abunmay.lm))
+abunaug.lm <- lm(abun ~ dens*lai, data = commetricsAug)
+           #  summary(abunaug.lm)
+          # summary(aov(abunaug.lm))
+
+                          #RARERICH
+#NS raremay.lm <- lm(rare.rich ~ dens*lai, data = commetricsMay)
+#            summary(raremay.lm)
+#              summary(aov(raremay.lm))
+#NS rareaug.lm <- lm(rare.rich ~ dens*lai, data = commetricsAug)
+#              summary(rareaug.lm)
+#              summary(aov(rareaug.lm))
+              
+              #DIVERSITY
+#NS divmay.lm <- lm(diver ~ dens*lai, data = commetricsMay)
+#            summary(divmay.lm)
+#              summary(aov(divmay.lm))
+#divaug.lm <- lm(diver ~ dens*lai, data = commetricsAug)
+#              summary(logaug.lm)
+#              summary(aov(divaug.lm))
+              
+#NS evenmay.lm <- lm(even ~ dens*lai, data = commetricsMay)
+#            summary(evenmay.lm)
+#              summary(aov(evenmay.lm))
+#evenaug.lm <- lm(even ~ dens*lai, data = commetricsAug)
+#              summary(evenaug.lm)
+#              summary(aov(evenaug.lm))
+             
+#shapiro.test(abunaug.lm$residuals)
+#  Shapiro-Wilk normality test
+
+#data:  abunaug.lm$residuals
+#W = 0.9112, p-value = 0.4749              
+
+abunaug.aov <- anova(abunaug.lm) 
+abunaug.aov <- as.matrix(abunaug.aov)  
+              
+#print(xtable(abunaug.aov, caption = "ANOVA of organismal abundance across all site in August as a function of mean meadow density and leaf area.", label = "table:commetrics", digits = c(0,0,2,2,3,4), table.placement = "tbp"), caption.placement = "top")              
+              
+@
+
+\section{Discussion}
+
+Epifaunal communities in seagrass meadows of Barkley Sound exhibit meadow-scale variability over small spatial and temporal scales. The patterns observed in these meadows are consistent with the highly variable seagrass community patterns reviewed by~\cite{Bostrom:2006a}. In my study, both intra- and inter-meadow variability in abundance, diversity, evenness, and composition were seen in May and August, however, inter-meadow variability was more pronounced in August. Shifts in the relative size of inter-meadow variability, which was driven partly by recruitment events, indicates seasonal fluctuations in epifaunal communities across meadows. These results have identified the scale of epifaunal community similarity relative to seagrass meadows in the region, and suggest that local underlying processes are important for structuring these communities. 
+
+The variability in community patterns observed suggests processes structuring epifaunal communities may differ within sites over the course of a summer. Seasonality of epifaunal taxa has been observed in other \emph{Z. marina} meadows, though target species have been limited in scope and are likely only a subset of total community diversity~\citep{Thom:1995}. In contrast, studies of seagrass systems in other regions have found little evidence for seasonal variability in distribution of multiple dominant taxa throughout the year~\citep{Gambi:1992}. In the meadows I observed, variation in the epifaunal community differed through time depending on site. In May, intra-meadow variability in rarefied richness and diversity was greater than inter-meadow variability, except at WI which had greater richness than the other sites. In August, greater inter-meadow variation in diversity and richness became more apparent as the most distant sites (DC and CB) began to diverge, with the other sites intermediate between the two. In addition, abundance of organisms increased at all sites from  May to August, though some were greater by an order of magnitude. This variation in abundance is reflected in the composition of epifaunal communities, which were unique across all sites through time. 
+
+Many of the differences observed in these epifaunal communities are a result of recruitment events seen at all sites by the end of the summer. The sea hare~\emph{Phyllaplysia taylori} and caprellid~\emph{Caprella sp.} were seen in much higher abundances relative to other fauna at DC and RP, while WI, NB, and CB were dominated by the mussel~\emph{Mytilus spp.}. All of these individuals were likely the result of reproductive events isolated within meadows (for \emph{P. taylori}, attached egg masses with crawl-away juveniles), or occurring within and among meadows (for \emph{Mytilus spp.}, broadcast spawners with pelagic larval stage). In the absence of other structuring forces, these differential dispersal strategies would be expected to create patchy distributions of sea hares, with more homogenous abundances of mussels. In fact, this was largely observed in both epifaunal community analyses and with ASUs. However, the near exclusion of ~\emph{Mytilus sp.} from DC meadows and ASUs indicated that other local processes are determining colonization at that site.
+
+The ability of epifaunal organisms to disperse across the study area did not appear to be limited for the most common taxa. All major contributors to meadow composition in 2012, with the notable exceptions of \emph{P. taylori} and pycnogonids, were observed in ASUs placed both inside, and outside seagrass meadows in 2013. Interestingly, the observed pycnogonid was a single specimen from the CL site on an ASU placed outside seagrass. This contrasts with the relatively larger population of pycnogonids seen within seagrass at the CB site both in May and August of 2012, which is the closest site  to CL where ASUs were placed in 2013. Even though pycnogonids were present in the regional species pool, their absence, or reduced abundance at CB in 2013 suggests that inter-annual seasonal variation occurrs within sites. The complete absence of ~\emph{P. taylori} from all ASU samples in 2013, is likely either an artifact of the ASU itself, or an indicator that patterns of diversity in Barkley Sound vary inter-annually. This variation is also seen in the surprising inclusion of chironomid larvae within ASU samples. Chironomid larvae are typically fresh-water young of midge flies and allies and were detected at three ASU sampling sites, and were not detected at all in 2012. An inter-annual shift in taxa within and among seagrass meadows agrees with observations of~\citet{Balata:2006} that indicate temporal variability in marine invertebrate assemblages is much greater than previously thought. This presents many challenges for the management of seagrass systems and associated communities, which may be experiencing structuring forces, not only across spatial scales, but across temporal scales that could be operating over years or decades.
+
+The relative strength of post-settlement processes and connectivity in structuring epifaunal communities likely differs depending on location of meadow in a larger regional context, as well as life-history of particular epifaunal organisms. While some organisms were observed across a broad spatial range, others were not. Amphipods were seen to have the one of the highest colonization successes, as has been observed in other seagrass systems~\citep{Gustafsson:2012}. Surprisingly, some taxa with highly dispersive pelagic larval stages were not seen at all sites, notably the mussel~\emph{Mytilus spp.}, one of the most abundant community members in August 2012. \emph{Mytilus spp.} was completely absent from DC in May 2012, and ASUs placed within DC in 2013. It was present in relatively low numbers in August 2013. The exclusion of mussels from DC could be a combination of predatory and competitive processes. In addition, their successful colonization and proliferation, even at sites which experience relatively lower mean salinity compared to oceanic norms, suggest that abiotic tolerance to local salinity conditions could be favoring mussels, which have been shown to both tolerate, and acclimate to low salinity conditions~\citep{Riisgard:2013}.
+
+Variations in diversity across space and time may be due to the strengthening regional temperature and salinity gradients observed in the region. Gradients can be the strongest structuring force for some animal community parameters~\citep{Sanders:2007a}. In addition, salinity gradients are known to structure near-shore marine communities, particularly in estuarine environments~\citep{Barnes:2012}. However, a pattern of increasing richness with declining average salinity exhibits an inverse relationship compared to previous observations in other~\emph{Z. marina} invertebrate communities~\citep{Yamada:2007}. This may be in part a result of the regionally low salinity of Barkley Sound compared to other studies which tended to see breaks in species richness at 30ppt~\citep{Barnes:2012}. An interaction between abiotic and biotic forces such as abiotic filtering coupled with competition, might be allowing small numbers of many taxa to colonize the less favorable, low-salinity condition, while at the same time preventing local dominance of any one taxa. The general decline of organismal abundance across the observed salinity gradient tends to support this conclusion. Another possibility is that the least saline sites were highly diverse due to stochastic processes, and that diversity was maintained though an alteration of local trophic structure or productivity. \citet{Duffy:2006} observed that the diversity of landscapes can determine ecosystem structure and processes, this may then in turn maintain historic patterns of diversity. 
+
+Relative exposure to local physical forcing may also explain some variation among epifaunal communities in Barkley Sound. In the winter, seagrass meadows are subject to heavy wind, waves, and other physical disturbance caused by seasonal storms, but these mechanical processes can be very site specific depending placement of meadows within the landscape. Physical forcing by wind and waves has been shown to maintain high diversity in seagrass meadows~\citep{Bostrom:2000}. Variation in species assemblages have also been explained by factors such as fetch, shore angle, and grain size of substrate~\citep{Bostrom:2006b}. This would suggest that sites with greater exposure to mechanical disturbance should exhibit higher diversity. Indeed, Wizard Island, which is in the middle of Satellite Passage between Trevor Channel and Imperial Eagle Channel, and the most exposed of all the sites, had the highest measured diversity at the beginning of the summer after majority of the seasonal storms had passed. As the winter storms subside, diversity among meadows begins to diverge as the role of local predation and abiotic gradient begin to more strongly structure the epifaunal communities. 
+
+Variation in nutrient inputs and seagrass epiphytes, which exert a bottom-up regulatory force, also structure epifaunal communities~\citep{Douglass:2007}. Inputs of nutrients can be seen both regionally as run-off from fragmented or developed terrestrial habitat, or locally as point-source inputs from concentrated human, or animal activity. Nutrient enhancement likely has different impacts on secondary production and trophic dynamics within a system depending on the strength and spatial scale of the input. This can fundamentally alter the community structure of seagrass meadows by directly increasing epiphyte biomass, which is then grazed by the epifaunal community~\citep{Douglass:2007,Bryars:2011,Frankovich:2005}. A relative increase in nutrients could decrease diversity within meadows by allowing a rapid population increase of dominant grazing taxa, which are then able to supress less competitive community members. This agrees with findings by~\citet{Duffy:2001} that suggest inter-specific competition is stronger than intra-specific competition for some common epifaunal taxa.  Increased epiphyte biomass can also alter community dynamics by increasing structural complexity~\citep{Bologna:1999,Gartner:2013}. Structural complexity of seagrass habitat can provide indirect modulation of trophic interactions by offering protection from predators and altering predator behavior~\citep{Cardoso:2007}. 
+
+In addition, seasonal migration of predatory fish such as shiner perch~\emph{Cymatogaster aggregata} could alter abundance and richness of epifaunal taxa via preferential predation on competitively dominant species~\citep{Morrow:1980,Caine:1989}. This could release rare species from competition and allow them to proliferate, increasing local diversity. The role of fish predators cannot be underestimated in this system as the role of top-down control in seagrass is well documented~\citep{Moksnes:2008,Baden:2012,Lewis:2012}.  These effects could change depending on the timing and frequency of these fish returns to nearshore habitat. The shiner perch~\emph{Cymatogaster aggregata} is a common predator of both~\emph{Idotea} and ~\emph{Caprella}~\citep{Caine:1989} and was observed frequently in all meadows in this study. Populations of caprellids, which are abundant in winter, can be greatly reduced by predatory fish such as shiner perch~\citep{Caine:1991}. The structural effects of seagrass itself on predator behavior may also impact epifaunal communities. Seagrass ecosystem structure can be modified directly and indirectly by grazing fish behaviour which is modulated by habitat heterogeneity~\citep{Macia:2005}. 
+
+The loss of seagrass meadow area worldwide suggests that a working knowledge of the scales at which different community processes function is vital to effectively preserving these habitats~\citep{Short:1996,Leibold:2004a}. Here, I presented data that highlight intra- and inter-meadow variability in epifaunal diversity in several seagrass meadows across a summer season. These meadows demonstrate patterns of seasonality as well as the potential for inter-annual variation in community structure. Biotic and abiotic forces acting across scales contribute to variation observed in patterns of epifaunal diversity and abundance. The relative strength of these various forces remains unknown, and future work identifying primary drivers of community assembly and persistence are needed to better understand the dynamics of epifaunal communities in seagrass.
+
+\chapter{General Conclusions}
+
+\section{Summary}
+Epifaunal communities of Pacific Northwest seagrass meadows differ across relatively small spatial and temporal scales. In Barkley Sound, various abiotic drivers such as temperature and salinity may be contributing to observed patterns, though no definitive relationships between environmental parameters and community composition have been determined. 
+
+\section{Recommendations For Future Research}
+While broad scale patterns of diversity have been detected in the current work, a more detailed analysis of abiotic factors that control organismal colonization and persistence is recommended to more clearly elucidate drivers of community assembly. Effects of sub-lethal temperatures and salinity which are seen in Barkley Sound throughout the summer may be determining community composition among meadows. In addition, information regarding trophic structure within these meadows, particularly those involving common fish predators might allow us to make more specific predictions of epifaunal diversity and composition based on seasonality and prey preferences of the fish. 
+
+  One approach which accounts for processes at various spatial and temporal scales is the use of the 'metacommunity' concept (Declerck et al., 2011; Frederic Guichard \& Steenweg, 2008; Leibold et al., 2004). A recent review of seagrass communities on the landscape level only briefly touches on metacommunity models (Bostrom et al. 2006).  The importance of local versus regional diversity and environmental factors in structuring communities has been addressed for near-shore ecosystems including seagrass (Sanvicente-Anorve, Sanchez-Ramirez, Ocana-Luna, Flores-Coto, \& Ordonez-Lopez, 2011; Witman, Etter, \& Smith, 2004; de Juan \& Hewitt, 2011), but the connections to metacommunity theory have remained implicit, without invoking predictions provided by the major paradigms of the theory.
+
+\section{Conclusion}
+
+Overall, I have found that seagrass meadow epifaunal communities of the Pacific Northwest are structured across local and regional scales. While much work remains to be done on the ecology of seagrass-associated communities, this study represents the first attempt to link diversity and composition of seagrass invertebrate communities in this region. Futher testing of abiotic and biotic parameters are likely to uncover primary drivers of community assembly, and associated function provided by multiple guilds of invertebrates. The testing of metacommunity principles in seagrass may prove especially fruitful as they integrate processes across scales, and could be a robust predictive framework in these systems. This is especially important for the conservation of seagrass habitat which is currently under threat.
+
+\bibliography{Thesis}
+
+%%% If you only have one appendix, please uncomment the following line.
+%\renewcommand{\appendicesname}{Appendix}
+\appendix
+\chapter{First Appendix}
+
+SIMPER table of all pairwise comparisons between sites and times for aggregated species data.
+
+\begin{landscape}
+% Table generated by Excel2LaTeX from sheet 'Sheet1'
+\begin{center}
+\begin{longtable}{rcccccc}
+\caption{Similarity percentage of aggregated species composition for all sites and times.}
+\label{table:aggsimper} \\ \hline 
+
+\multicolumn{7}{ |c| }{Aggregated SIMPER} \\ \hline
+\endfirsthead
+
+\multicolumn{7}{c}%
+{{\bfseries \tablename\ \thetable{} -- continued from previous page}} \\
+\hline \multicolumn{7}{ |c| }{Aggregated SIMPER} \\ \hline
+\endhead
+
+\hline \multicolumn{7}{|r|}{{Continued on next page}} \\ \hline
+\endfoot
+
+\hline \hline
+\endlastfoot
+  
+    \hline \\
+    Groups DC  \&  WI &       &       &       &       &       &  \\
+    Average dissimilarity = 54.84 &       &       &       &       &       &  \\
+          &       &       &       &       &       &  \\
+          & Group DC & Group WI &       &       &       &  \\
+    Species & Av.Abund & Av.Abund & Av.Diss & Diss/SD & Contrib\% & Cum.\% \\ \hline 
+    \textit{Caprella sp.} & 3.45  & 1.72  & 8.79  & 1.30  & 16.02 & 16.02 \\
+    \textit{Phyllaplysia taylori} & 2.82  & 0.54  & 7.53  & 1.75  & 13.73 & 29.75 \\
+    \textit{Mytilus spp.} & 0.37  & 2.16  & 4.95  & 1.13  & 9.03  & 38.78 \\
+    \textit{Amphipoda} & 2.25  & 1.76  & 3.48  & 0.85  & 6.35  & 45.12 \\
+    \textit{Nereidae} & 1.23  & 1.77  & 3.38  & 0.94  & 6.16  & 51.29 \\
+    \textit{Gastropoda} & 0.48  & 0.97  & 3.07  & 1.03  & 5.60  & 56.88 \\
+    Tubeworm & 0.00  & 1.20  & 3.00  & 0.96  & 5.46  & 62.35 \\
+    \textit{Nematoda} & 0.06  & 0.44  & 2.81  & 0.69  & 5.13  & 67.48 \\
+    Unidentified \emph{Bivalvia} & 0.03  & 0.81  & 2.64  & 0.90  & 4.81  & 72.29 \\
+    \textit{Idotea resecata} & 1.20  & 1.12  & 2.44  & 0.77  & 4.44  & 76.73 \\
+    \textit{Cirolana sp.} & 0.00  & 0.52  & 2.31  & 0.85  & 4.21  & 80.93 \\
+    \textit{Tanaidacea} & 0.31  & 0.30  & 2.16  & 0.74  & 3.93  & 84.86 \\
+    \textit{Copepoda} & 0.00  & 0.21  & 1.38  & 0.47  & 2.52  & 87.38 \\
+    \textit{Pycnogonida} & 0.06  & 0.43  & 1.14  & 0.66  & 2.09  & 89.47 \\
+    \textit{Lottia pelta} & 0.11  & 0.22  & 0.75  & 0.54  & 1.36  & 90.83 \\ \hline 
+          &       &       &       &       &       &  \\
+    Groups DC  \&  RP &       &       &       &       &       &  \\
+    Average dissimilarity = 43.75 &       &       &       &       &       &  \\
+          &       &       &       &       &       &  \\
+          & Group DC & Group RP &       &       &       &  \\
+    Species & Av.Abund & Av.Abund & Av.Diss & Diss/SD & Contrib\% & Cum.\% \\ \hline 
+    \textit{Phyllaplysia taylori} & 2.82  & 1.92  & 6.62  & 0.82  & 15.14 & 15.14 \\
+    \textit{Amphipoda} & 2.25  & 1.20  & 6.11  & 0.96  & 13.97 & 29.11 \\
+    \textit{Caprella sp.} & 3.45  & 2.65  & 5.76  & 0.68  & 13.17 & 42.28 \\
+    \textit{Idotea resecata} & 1.20  & 0.53  & 4.45  & 1.18  & 10.16 & 52.44 \\
+    \textit{Nereidae} & 1.23  & 1.56  & 4.21  & 0.99  & 9.62  & 62.06 \\
+    Tubeworm & 0.00  & 0.90  & 3.56  & 1.02  & 8.13  & 70.19 \\
+    \textit{Gastropoda} & 0.48  & 0.27  & 2.40  & 0.79  & 5.49  & 75.68 \\
+    \textit{Mytilus spp.} & 0.37  & 1.01  & 2.27  & 0.74  & 5.19  & 80.87 \\
+    \textit{Tanaidacea} & 0.31  & 0.44  & 2.15  & 0.80  & 4.91  & 85.78 \\
+    \textit{Nematoda} & 0.06  & 0.55  & 1.38  & 0.66  & 3.15  & 88.93 \\
+    \textit{Pugettia spp.} & 0.22  & 0.03  & 0.89  & 0.47  & 2.03  & 90.96 \\ \hline 
+          &       &       &       &       &       &  \\
+    Groups WI  \&  RP &       &       &       &       &       &  \\
+    Average dissimilarity = 59.01 &       &       &       &       &       &  \\
+          &       &       &       &       &       &  \\
+          & Group WI & Group RP &       &       &       &  \\
+    Species & Av.Abund & Av.Abund & Av.Diss & Diss/SD & Contrib\% & Cum.\% \\ \hline 
+    \textit{Caprella sp.} & 1.72  & 2.65  & 8.96  & 1.24  & 15.19 & 15.19 \\
+    \textit{Phyllaplysia taylori} & 0.54  & 1.92  & 5.56  & 1.52  & 9.43  & 24.62 \\
+    Tubeworm & 1.20  & 0.90  & 4.50  & 1.08  & 7.62  & 32.24 \\
+    \textit{Amphipoda} & 1.76  & 1.20  & 4.38  & 0.85  & 7.43  & 39.67 \\
+    \textit{Mytilus spp.} & 2.16  & 1.01  & 4.22  & 0.78  & 7.15  & 46.82 \\
+    \textit{Nereidae} & 1.77  & 1.56  & 4.00  & 0.84  & 6.78  & 53.60 \\
+    \textit{Nematoda} & 0.44  & 0.55  & 3.99  & 0.97  & 6.77  & 60.37 \\
+    \textit{Idotea resecata} & 1.12  & 0.53  & 3.95  & 1.01  & 6.69  & 67.06 \\
+    \textit{Gastropoda} & 0.97  & 0.27  & 3.31  & 1.01  & 5.60  & 72.66 \\
+    Unidentified \textit{Bivalvia} & 0.81  & 0.22  & 2.82  & 0.88  & 4.78  & 77.44 \\
+    \textit{Tanaidacea} & 0.30  & 0.44  & 2.44  & 0.76  & 4.14  & 81.58 \\
+    \textit{Cirolana sp.} & 0.52  & 0.00  & 2.43  & 0.82  & 4.11  & 85.70 \\
+    \textit{Copepoda} & 0.21  & 0.00  & 1.45  & 0.43  & 2.46  & 88.15 \\
+    \textit{Pycnogonida} & 0.43  & 0.06  & 1.29  & 0.63  & 2.18  & 90.33 \\ \hline 
+          &       &       &       &       &       &  \\
+    Groups DC  \&  NB &       &       &       &       &       &  \\
+    Average dissimilarity = 62.68 &       &       &       &       &       &  \\
+          &       &       &       &       &       &  \\
+          & Group DC & Group NB &       &       &       &  \\
+    Species & Av.Abund & Av.Abund & Av.Diss & Diss/SD & Contrib\% & Cum.\% \\ \hline 
+    \textit{Caprella sp.} & 3.45  & 0.79  & 12.61 & 2.40  & 20.12 & 20.12 \\
+    \textit{Phyllaplysia taylori} & 2.82  & 0.00  & 11.45 & 1.62  & 18.27 & 38.38 \\
+    \textit{Mytilus spp.} & 0.37  & 1.74  & 6.57  & 1.84  & 10.48 & 48.87 \\
+    \textit{Amphipoda} & 2.25  & 1.27  & 5.64  & 1.13  & 9.00  & 57.86 \\
+    \textit{Idotea resecata} & 1.20  & 1.85  & 5.07  & 0.97  & 8.09  & 65.95 \\
+    \textit{Nereidae} & 1.23  & 0.82  & 3.52  & 0.98  & 5.62  & 71.57 \\
+    \textit{Acari} & 0.00  & 0.53  & 3.20  & 0.72  & 5.11  & 76.68 \\
+    \textit{Nematoda} & 0.06  & 0.86  & 3.03  & 0.91  & 4.84  & 81.51 \\
+    \textit{Gastropoda} & 0.48  & 0.20  & 2.51  & 0.86  & 4.01  & 85.52 \\
+    \textit{Tanaidacea} & 0.31  & 0.30  & 2.27  & 0.79  & 3.62  & 89.14 \\
+    \textit{Copepoda} & 0.00  & 0.25  & 1.51  & 0.37  & 2.41  & 91.55 \\ \hline 
+          &       &       &       &       &       &  \\
+    Groups WI  \&  NB &       &       &       &       &       &  \\
+    Average dissimilarity = 58.21 &       &       &       &       &       &  \\
+          &       &       &       &       &       &  \\
+          & Group WI & Group NB &       &       &       &  \\
+    Species & Av.Abund & Av.Abund & Av.Diss & Diss/SD & Contrib\% & Cum.\% \\ \hline 
+    \textit{Mytilus spp.} & 2.16  & 1.74  & 5.51  & 1.36  & 9.46  & 9.46 \\
+    \textit{Idotea resecata} & 1.12  & 1.85  & 5.30  & 1.01  & 9.10  & 18.57 \\
+    \textit{Nematoda} & 0.44  & 0.86  & 5.00  & 1.38  & 8.58  & 27.15 \\
+    \textit{Caprella sp.} & 1.72  & 0.79  & 4.94  & 1.30  & 8.49  & 35.64 \\
+    \textit{Nereidae} & 1.77  & 0.82  & 4.86  & 1.28  & 8.36  & 44.00 \\
+    \textit{Gastropoda} & 0.97  & 0.20  & 3.91  & 1.35  & 6.72  & 50.72 \\
+    Tubeworm & 1.20  & 0.00  & 3.77  & 0.95  & 6.48  & 57.20 \\
+    \textit{Amphipoda} & 1.76  & 1.27  & 3.50  & 0.82  & 6.02  & 63.22 \\
+    Unidentified \textit{Bivalvia} & 0.81  & 0.10  & 3.15  & 1.01  & 5.42  & 68.63 \\
+    \textit{Acari} & 0.07  & 0.53  & 3.09  & 0.70  & 5.30  & 73.94 \\
+    \textit{Cirolana sp.} & 0.52  & 0.09  & 2.41  & 0.85  & 4.14  & 78.08 \\
+    \textit{Copepoda} & 0.21  & 0.25  & 2.28  & 0.54  & 3.92  & 82.00 \\
+    \textit{Tanaidacea} & 0.30  & 0.30  & 2.18  & 0.66  & 3.74  & 85.75 \\
+    \textit{Phyllaplysia taylori} & 0.54  & 0.00  & 1.64  & 0.73  & 2.82  & 88.57 \\
+    \textit{Pycnogonida} & 0.43  & 0.00  & 1.43  & 0.68  & 2.45  & 91.02 \\ \hline 
+          &       &       &       &       &       &  \\
+    Groups RP  \&  NB &       &       &       &       &       &  \\
+    Average dissimilarity = 66.29 &       &       &       &       &       &  \\
+          &       &       &       &       &       &  \\
+          & Group RP & Group NB &       &       &       &  \\
+    Species & Av.Abund & Av.Abund & Av.Diss & Diss/SD & Contrib\% & Cum.\% \\ \hline 
+    \textit{Caprella sp.} & 2.65  & 0.79  & 10.90 & 1.91  & 16.44 & 16.44 \\
+    \textit{Idotea resecata} & 0.53  & 1.85  & 8.44  & 1.17  & 12.73 & 29.17 \\
+    \textit{Phyllaplysia taylori} & 1.92  & 0.00  & 7.50  & 1.37  & 11.32 & 40.49 \\
+    \textit{Mytilus spp.} & 1.01  & 1.74  & 6.99  & 0.99  & 10.55 & 51.04 \\
+    \textit{Nereidae} & 1.56  & 0.82  & 5.59  & 1.23  & 8.43  & 59.47 \\
+    \textit{Amphipoda} & 1.20  & 1.27  & 4.83  & 0.90  & 7.29  & 66.76 \\
+    Tubeworm & 0.90  & 0.00  & 3.95  & 1.07  & 5.96  & 72.72 \\
+    \textit{Acari} & 0.00  & 0.53  & 3.39  & 0.66  & 5.11  & 77.83 \\
+    \textit{Nematoda} & 0.55  & 0.86  & 3.11  & 0.62  & 4.70  & 82.53 \\
+    \textit{Tanaidacea} & 0.44  & 0.30  & 2.68  & 0.82  & 4.05  & 86.57 \\
+    \textit{Gastropoda} & 0.27  & 0.20  & 1.87  & 0.67  & 2.82  & 89.39 \\
+    \textit{Copepoda} & 0.00  & 0.25  & 1.56  & 0.36  & 2.36  & 91.75 \\ \hline 
+          &       &       &       &       &       &  \\
+    Groups DC  \&  CB &       &       &       &       &       &  \\
+    Average dissimilarity = 68.08 &       &       &       &       &       &  \\
+          &       &       &       &       &       &  \\
+          & Group DC & Group CB &       &       &       &  \\
+    Species & Av.Abund & Av.Abund & Av.Diss & Diss/SD & Contrib\% & Cum.\% \\ \hline 
+    \textit{Caprella sp.} & 3.45  & 0.80  & 12.95 & 1.85  & 19.02 & 19.02 \\
+    \textit{Phyllaplysia taylori} & 2.82  & 0.00  & 10.83 & 1.74  & 15.91 & 34.93 \\
+    \textit{Amphipoda} & 2.25  & 0.94  & 8.38  & 1.15  & 12.31 & 47.24 \\
+    \textit{Pycnogonida} & 0.06  & 1.49  & 8.12  & 1.34  & 11.93 & 59.17 \\
+    \textit{Nereidae} & 1.23  & 0.76  & 4.14  & 1.04  & 6.08  & 65.24 \\
+    \textit{Idotea resecata} & 1.20  & 1.39  & 3.74  & 0.84  & 5.49  & 70.73 \\
+    \textit{Tanaidacea} & 0.31  & 1.09  & 3.58  & 1.12  & 5.26  & 75.98 \\
+    \textit{Mytilus spp.} & 0.37  & 1.18  & 2.73  & 0.82  & 4.01  & 79.99 \\
+    \textit{Gastropoda} & 0.48  & 0.24  & 2.41  & 0.76  & 3.53  & 83.53 \\
+    \textit{Nematoda} & 0.06  & 0.57  & 1.71  & 0.60  & 2.52  & 86.04 \\
+    \textit{Acari} & 0.00  & 0.39  & 1.42  & 0.61  & 2.08  & 88.13 \\
+    \textit{Lottia pelta} & 0.11  & 0.16  & 1.07  & 0.49  & 1.58  & 89.70 \\
+    \textit{Copepoda} & 0.00  & 0.23  & 0.95  & 0.43  & 1.39  & 91.10 \\ \hline 
+          &       &       &       &       &       &  \\
+    Groups WI  \&  CB &       &       &       &       &       &  \\
+    Average dissimilarity = 65.12 &       &       &       &       &       &  \\
+          &       &       &       &       &       &  \\
+          & Group WI & Group CB &       &       &       &  \\
+    Species & Av.Abund & Av.Abund & Av.Diss & Diss/SD & Contrib\% & Cum.\% \\ \hline 
+    \textit{Pycnogonida} & 0.43  & 1.49  & 7.67  & 1.12  & 11.77 & 11.77 \\
+    \textit{Amphipoda} & 1.76  & 0.94  & 5.60  & 0.93  & 8.59  & 20.37 \\
+    \textit{Nereidae} & 1.77  & 0.76  & 5.31  & 1.18  & 8.15  & 28.52 \\
+    \textit{Caprella sp.} & 1.72  & 0.80  & 5.27  & 1.30  & 8.10  & 36.62 \\
+    \textit{Nematoda} & 0.44  & 0.57  & 4.56  & 0.99  & 7.01  & 43.63 \\
+    \textit{Tanaidacea} & 0.30  & 1.09  & 4.34  & 1.32  & 6.67  & 50.30 \\
+    Tubeworm & 1.20  & 0.11  & 3.98  & 1.12  & 6.11  & 56.41 \\
+    \textit{Idotea resecata} & 1.12  & 1.39  & 3.79  & 0.80  & 5.83  & 62.24 \\
+    \textit{Mytilus spp.} & 2.16  & 1.18  & 3.53  & 0.98  & 5.42  & 67.65 \\
+    \textit{Gastropoda} & 0.97  & 0.24  & 3.03  & 0.93  & 4.65  & 72.31 \\
+    Unidentified \textit{Bivalvia} & 0.81  & 0.21  & 2.99  & 0.90  & 4.59  & 76.90 \\
+    \textit{Cirolana sp.} & 0.52  & 0.00  & 2.60  & 0.81  & 3.99  & 80.89 \\
+    \textit{Copepoda} & 0.21  & 0.23  & 2.11  & 0.56  & 3.24  & 84.13 \\
+    \textit{Acari} & 0.07  & 0.39  & 1.90  & 0.48  & 2.91  & 87.04 \\
+    \textit{Phyllaplysia taylori} & 0.54  & 0.00  & 1.51  & 0.71  & 2.33  & 89.37 \\
+    \textit{Lottia pelta} & 0.22  & 0.16  & 1.38  & 0.58  & 2.12  & 91.49 \\ \hline 
+          &       &       &       &       &       &  \\
+    Groups RP  \&  CB &       &       &       &       &       &  \\
+    Average dissimilarity = 69.94 &       &       &       &       &       &  \\
+          &       &       &       &       &       &  \\
+          & Group RP & Group CB &       &       &       &  \\
+    Species & Av.Abund & Av.Abund & Av.Diss & Diss/SD & Contrib\% & Cum.\% \\ \hline 
+    \textit{Caprella sp.} & 2.65  & 0.80  & 11.06 & 1.43  & 15.81 & 15.81 \\
+    \textit{Pycnogonida} & 0.06  & 1.49  & 8.93  & 1.16  & 12.77 & 28.58 \\
+    \textit{Phyllaplysia taylori} & 1.92  & 0.00  & 7.25  & 1.41  & 10.36 & 38.94 \\
+    \textit{Idotea resecata} & 0.53  & 1.39  & 6.24  & 0.95  & 8.92  & 47.87 \\
+    \textit{Nereidae} & 1.56  & 0.76  & 5.88  & 1.15  & 8.41  & 56.28 \\
+    \textit{Amphipoda} & 1.20  & 0.94  & 5.73  & 1.06  & 8.19  & 64.47 \\
+    \textit{Tanaidacea} & 0.44  & 1.09  & 4.63  & 1.02  & 6.61  & 71.08 \\
+    Tubeworm & 0.90  & 0.11  & 4.06  & 0.98  & 5.80  & 76.88 \\
+    \textit{Mytilus spp.} & 1.01  & 1.18  & 2.94  & 0.52  & 4.20  & 81.08 \\
+    \textit{Nematoda} & 0.55  & 0.57  & 2.26  & 0.51  & 3.24  & 84.32 \\
+    \textit{Gastropoda} & 0.27  & 0.24  & 1.68  & 0.62  & 2.40  & 86.71 \\
+    \textit{Acari} & 0.00  & 0.39  & 1.58  & 0.59  & 2.25  & 88.97 \\
+    Unidentified \textit{Bivalvia} & 0.22  & 0.21  & 1.32  & 0.59  & 1.89  & 90.86 \\ \hline 
+          &       &       &       &       &       &  \\
+    Groups NB  \&  CB &       &       &       &       &       &  \\
+    Average dissimilarity = 56.08 &       &       &       &       &       &  \\
+          &       &       &       &       &       &  \\
+          & Group NB & Group CB &       &       &       &  \\
+    Species & Av.Abund & Av.Abund & Av.Diss & Diss/SD & Contrib\% & Cum.\% \\ \hline 
+    \textit{Pycnogonida} & 0.00  & 1.49  & 8.83  & 1.42  & 15.74 & 15.74 \\
+    \textit{Mytilus spp.} & 1.74  & 1.18  & 5.62  & 1.09  & 10.02 & 25.76 \\
+    \textit{Tanaidacea} & 0.30  & 1.09  & 5.30  & 1.32  & 9.46  & 35.22 \\
+    \textit{Acari} & 0.53  & 0.39  & 4.42  & 0.85  & 7.89  & 43.11 \\
+    \textit{Amphipoda} & 1.27  & 0.94  & 4.32  & 0.96  & 7.70  & 50.80 \\
+    \textit{Idotea resecata} & 1.85  & 1.39  & 4.17  & 0.68  & 7.44  & 58.25 \\
+    \textit{Caprella sp.} & 0.79  & 0.80  & 4.03  & 1.01  & 7.19  & 65.44 \\
+    \textit{Nereidae} & 0.82  & 0.76  & 4.03  & 1.04  & 7.18  & 72.62 \\
+    \textit{Nematoda} & 0.86  & 0.57  & 3.05  & 0.74  & 5.44  & 78.06 \\
+    \textit{Copepoda} & 0.25  & 0.23  & 2.44  & 0.51  & 4.35  & 82.41 \\
+    \textit{Gastropoda} & 0.20  & 0.24  & 1.93  & 0.69  & 3.45  & 85.86 \\
+    Unidentified \textit{Bivalvia} & 0.10  & 0.21  & 1.34  & 0.56  & 2.39  & 88.24 \\
+    \textit{Lottia pelta} & 0.04  & 0.16  & 0.99  & 0.43  & 1.76  & 90.00 \\ \hline 
+          &       &       &       &       &       &  \\
+    Groups May  \&  August &       &       &       &       &       &  \\
+    Average dissimilarity = 58.26 &       &       &       &       &       &  \\
+          &       &       &       &       &       &  \\
+          & Group May & Group August &       &       &       &  \\
+    Species &  Av.Abund &     Av.Abund & Av.Diss & Diss/SD & Contrib\% & Cum.\% \\ \hline
+    \textit{Mytilus spp.} & 0.27  & 2.31  & 8.60  & 1.67  & 14.76 & 14.76 \\
+    \textit{Caprella sp.} & 1.22  & 2.55  & 7.33  & 1.12  & 12.58 & 27.34 \\
+    \textit{Phyllaplysia taylori} & 0.36  & 1.75  & 5.66  & 0.84  & 9.72  & 37.06 \\
+    \textit{Nereidae} & 0.90  & 1.55  & 4.38  & 1.00  & 7.52  & 44.58 \\
+    \textit{Amphipoda} & 1.23  & 1.74  & 4.14  & 0.95  & 7.11  & 51.68 \\
+    \textit{Nematoda} & 0.20  & 0.79  & 4.13  & 0.92  & 7.09  & 58.77 \\
+    \textit{Idotea resecata} & 1.18  & 1.26  & 3.32  & 0.75  & 5.69  & 64.47 \\
+    \textit{Tanaidacea} & 0.38  & 0.59  & 3.15  & 0.87  & 5.41  & 69.87 \\
+    Tubeworm & 0.19  & 0.69  & 2.72  & 0.68  & 4.67  & 74.54 \\
+    \textit{Gastropoda} & 0.28  & 0.58  & 2.36  & 0.90  & 4.05  & 78.59 \\
+    \textit{Pycnogonida} & 0.37  & 0.44  & 1.79  & 0.51  & 3.07  & 81.66 \\
+    \textit{Acari} & 0.26  & 0.13  & 1.76  & 0.50  & 3.02  & 84.68 \\
+    Unidentified \textit{Bivalvia} & 0.17  & 0.38  & 1.48  & 0.65  & 2.54  & 87.22 \\
+    \textit{Copepoda} & 0.23  & 0.05  & 1.16  & 0.40  & 2.00  & 89.22 \\
+    \textit{Cirripedia:Sessilia} & 0.01  & 0.18  & 0.82  & 0.45  & 1.41  & 90.63 \\ \hline 
+          &       &       &       &       &       &  \\
+    \end{longtable}%
+    \end{center}
+
+  \end{landscape}
+  
+\chapter{Second Appendix}
+
+Raw species data analyses.
+
+\section{Diversity \& Evenness}
+
+\begin{figure}
+\begin{center}
+<<label = fig:rawrich, echo = FALSE, fig = TRUE, results = HIDE, height = 8>>=
+##figure of raw richness data
+
+#community partitioned by sample
+comm <- read.csv("sievedPCA.csv")
+
+#reorder factors
+comm$site <- factor(comm$site, levels = c("DC", "WI", "RP", "NB", "CB")) 
+comm$time <- factor(comm$time, levels = c("May","August"))
+
+#make presence/absence matrix and add up for richness
+presabscomm <- comm 
+presabscomm[presabscomm > 0] <- 1
+presabscomm$richness <- rowSums(presabscomm[!names(presabscomm)%in%c("site","time","Sample","div")])
+
+#ANODE-Chi and ANOVA of data in table:rawrich  found below
+
+n.groups <- 5 
+
+# comparison matrix- rows are panels, columns are groups
+# these are computed elsewhere
+comparison.matrixrich <- rbind(
+  c('AB','B','AB','AB','A'),
+  c('B','C','AB','A','B')
+)
+
+rawrich <- bwplot(richness~site|time, data = presabscomm, ylab=list(label="# of Species", fontsize = 15), xlab = "", aspect = 1.4,
+        subscripts=TRUE, notch=FALSE, ylim = c(-1,25),
+       strip=TRUE, scales = list(x = list(draw = FALSE)),
+       par.settings=list(plot.symbol=list(col=1, cex=0.75), 
+                         box.dot=list(cex=0.75), box.rectangle=list(col=1), box.umbrella=list(col=1, lty = 1),
+                         layout.heights=list(top.padding=0.5, bottom.padding=-1)),
+       panel=function(x, y, n=n.groups, cm=comparison.matrixrich, ...) {
+         # basic bwplot
+         panel.bwplot(x, y, ...)
+         # compute offset from top of 'umbrella'
+         y.offset <- tapply(y, x, function(i) boxplot.stats(i)$stats[5])
+         # add text just above offset, by panel number
+         panel.text(1:n, y.offset + 1, cm[packet.number(), ], font=2)
+       })
+
+##figure of rarefied richness data
+
+#community partitioned by sample
+comm <- read.csv("sievedPCA.csv")
+
+#reorder factors
+comm$site <- factor(comm$site, levels = c("DC", "WI", "RP", "NB", "CB")) 
+comm$time <- factor(comm$time, levels = c("May","August"))
+
+#min(rowSums(comm[,-c(1:3)]))
+a <- subset(comm,rowSums(comm[,-c(1:3)])>10)
+#min(rowSums(a[,-c(1:3)]))
+
+sr_all <- rarefy(a[,-c(1:3)],min(rowSums(a[,-c(1:3)])))
+
+df_all <-  data.frame(a[,c(1:2)],sr_all)
+names(df_all) <-  c("site","time","rarefied")
+
+df_all$site <- factor(df_all$site, levels= c(c("DC", "WI", "RP",
+                                               "NB", "CB")))
+                     
+
+rarerich.aov <- aov(rarefied ~ site*time, data = df_all)
+
+#summary(rarerich.aov)
+#             Df Sum Sq Mean Sq F value   Pr(>F)    
+#site          4  85.61  21.402   27.28  < 2e-16 ***
+#time          1   9.01   9.014   11.49 0.000915 ***
+#site:time     4  62.76  15.691   20.00 5.45e-13 ***
+#Residuals   137 107.48   0.785                     
+#---
+#Signif. codes:  0 ‘***’ 0.001 ‘**’ 0.01 ‘*’ 0.05 ‘.’ 0.1 ‘ ’ 1
+
+#rich.tuk <- TukeyHSD(rarerich.aov)
+
+n.groups <- 5
+
+# comparison matrix- rows are panels, columns are groups
+# these are computed elsewhere
+comparison.matrixrare <- rbind(
+  c('A','B','A','A','A'),
+  c('A','BC','AB','BC','C')
+)
+
+rarerich <- bwplot(rarefied~site|time, data = df_all, ylab=list(label="Rarefied Richness", fontsize = 15), xlab = "Sites", aspect = 1.35,
+        subscripts=TRUE, notch=FALSE,
+        strip=FALSE, scales = list(x = list(draw = TRUE)),
+       par.settings=list(plot.symbol=list(col=1, cex=0.75), 
+                         box.dot=list(cex=0.75), box.rectangle=list(col=1), box.umbrella=list(col=1, lty = 1)),
+                   layout.heights=list(top.padding=-3, bottom.padding=-1),
+                   ylim = c(1,11),
+       panel=function(x, y, n=n.groups, cm=comparison.matrixrare, ...) {
+         # basic bwplot
+         panel.bwplot(x, y, ...)
+         # compute offset from top of 'umbrella'
+         y.offset <- tapply(y, x, function(i) boxplot.stats(i)$stats[5])
+         # add text just above offset, by panel number
+         panel.text(1:n, y.offset + 1, cm[packet.number(), ], font=2)
+       })
+
+
+
+print(rawrich, position = c(0,0.5,1,1), more = TRUE)
+print(rarerich, position = c(0,0,1,0.6))
+ltext(210,525,label = "A", cex = 2)
+ltext(210,275,label = "B",cex = 2)
+
+@
+\end{center}
+\caption{Mean richness of raw species data (A) and rarefied richness of all raw species (B). All statistical values shown are an interaction between site and time. Pairwise comparisons were made within each time among sites (Tukey and General Linear Hypotheses, p < 0.05)}
+\label{fig:rawrich} 
+\end{figure}
+
+<<label = table:rawrich, echo = FALSE, results = tex>>=
+
+#community partitioned by sample
+comm <- read.csv("sievedPCA.csv")
+
+#reorder factors
+comm$site <- factor(comm$site, levels = c("DC", "WI", "RP", "NB", "CB")) 
+
+#make presence/absence matrix and add up for richness
+presabscomm <- comm 
+presabscomm[presabscomm > 0] <- 1
+presabscomm$richness <- rowSums(presabscomm[!names(presabscomm)%in%c("site","time","Sample","div")])
+
+#presabscomm.lm <- lm(richness ~ site*time, data = presabscomm)
+#shapiro.test(presabscomm.lm$residuals)
+#  Shapiro-Wilk normality test
+#data:  presabscomm.lm$residuals
+#W = 0.9667, p-value = 0.0006771
+
+presabs.glm <- glm(richness ~ site*time , data = presabscomm, family="poisson")
+
+presabs.aov <- anova(presabs.glm,test="Chi")
+#Analysis of Deviance Table
+
+#Model: poisson, link: log
+
+#Response: richness
+
+#Terms added sequentially (first to last)
+
+
+#          Df Deviance Resid. Df Resid. Dev  Pr(>Chi)    
+#NULL                        159     377.13              
+#site       4   59.833       155     317.30 3.144e-12 ***
+#time       1   69.616       154     247.68 < 2.2e-16 ***
+#site:time  4   16.576       150     231.11  0.002336 ** 
+#---
+#Signif. codes:  0 ‘***’ 0.001 ‘**’ 0.01 ‘*’ 0.05 ‘.’ 0.1 ‘ ’ 1
+
+presabs.aov <- as.matrix(presabs.aov)
+
+#presabsa <- subset(presabscomm, time == "May")
+#presabse <- subset(presabscomm, time == "August")
+
+#presabsa.glm <- glm(richness ~ site, data = presabsa, family = "poisson")
+#presabsa.tuk <- glht(presabsa.glm, linfct = mcp(site = "Tukey"))
+#summary(presabsa.tuk)
+#   Simultaneous Tests for General Linear Hypotheses
+
+#Multiple Comparisons of Means: Tukey Contrasts
+
+
+#Fit: glm(formula = richness ~ site, family = "poisson", data = presabsa)
+
+#Linear Hypotheses:
+#             Estimate Std. Error z value Pr(>|z|)    
+#WI - DC == 0  0.18088    0.12576   1.438   0.6016    
+#RP - DC == 0 -0.11886    0.13539  -0.878   0.9047    
+#NB - DC == 0 -0.08076    0.13404  -0.603   0.9746    
+#CB - DC == 0 -0.37156    0.14533  -2.557   0.0781 .  
+#RP - WI == 0 -0.29974    0.13001  -2.306   0.1423    
+#NB - WI == 0 -0.26165    0.12861  -2.034   0.2484    
+#CB - WI == 0 -0.55245    0.14033  -3.937   <0.001 ***
+#NB - RP == 0  0.03810    0.13804   0.276   0.9987    
+#CB - RP == 0 -0.25270    0.14902  -1.696   0.4351    
+#CB - NB == 0 -0.29080    0.14780  -1.968   0.2809    
+#---
+#Signif. codes:  0 ‘***’ 0.001 ‘**’ 0.01 ‘*’ 0.05 ‘.’ 0.1 ‘ ’ 1
+#(Adjusted p values reported -- single-step method)
+
+#presabse.glm <- glm(richness ~ site, data = presabse, family = "poisson")
+#presabse.tuk <- glht(presabse.glm, linfct = mcp(site = "Tukey"))
+#summary(presabse.tuk)
+#   Simultaneous Tests for General Linear Hypotheses
+
+#Multiple Comparisons of Means: Tukey Contrasts
+
+#Fit: glm(formula = richness ~ site, family = "poisson", data = presabse)
+
+#Linear Hypotheses:
+#             Estimate Std. Error z value Pr(>|z|)    
+#WI - DC == 0  0.41730    0.09937   4.200   <0.001 ***
+#RP - DC == 0 -0.20398    0.11512  -1.772   0.3878    
+#NB - DC == 0 -0.32817    0.11923  -2.752   0.0463 *  
+#CB - DC == 0  0.04082    0.10801   0.378   0.9956    
+#RP - WI == 0 -0.62128    0.10593  -5.865   <0.001 ***
+#NB - WI == 0 -0.74547    0.11039  -6.753   <0.001 ***
+#CB - WI == 0 -0.37648    0.09816  -3.835   0.0012 ** 
+#NB - RP == 0 -0.12419    0.12475  -0.995   0.8563    
+#CB - RP == 0  0.24481    0.11408   2.146   0.1990    
+#CB - NB == 0  0.36900    0.11823   3.121   0.0154 *  
+#---
+#Signif. codes:  0 ‘***’ 0.001 ‘**’ 0.01 ‘*’ 0.05 ‘.’ 0.1 ‘ ’ 1
+#(Adjusted p values reported -- single-step method)
+
+
+
+print(xtable(presabscomm.aov, caption = "ANODE-Chi of raw species richness by site and time.", label = "table:rawrich", digits = c(0,0,2,2,3,4), table.placement = "tbp"), caption.placement = "top")
+@
+
+<<label = table:rarerich, echo = FALSE, results = tex>>=
+
+##table of rarefied richness data
+
+#community partitioned by sample
+comm <- read.csv("sievedPCA.csv")
+
+#reorder factors
+comm$site <- factor(comm$site, levels = c("DC", "WI", "RP", "NB", "CB")) 
+comm$time <- factor(comm$time, levels = c("May","August"))
+
+#min(rowSums(comm[,-c(1:3)]))
+a <- subset(comm,rowSums(comm[,-c(1:3)])>10)
+#min(rowSums(a[,-c(1:3)]))
+
+sr_all <- rarefy(a[,-c(1:3)],min(rowSums(a[,-c(1:3)])))
+
+df_all <-  data.frame(a[,c(1:2)],sr_all)
+names(df_all) <-  c("site","time","rarefied")
+
+df_all$site <- factor(df_all$site, levels= c(c("DC", "WI", "RP",
+                                               "NB", "CB")))
+
+rarerich.lm <- lm(rarefied ~ site*time, data = df_all)
+#shapiro.test(rarerich.lm$residuals)
+
+#anova of richness
+rarerich.aov <- anova(rarerich.lm)
+rarerich.aov <- as.matrix(rarerich.aov)
+
+print(xtable(rarerich.aov, caption = "ANOVA of rarefied species richness by site and time.", label = "table:rarerich", digits = c(0,0,2,2,3,4), table.placement = "tbp"), caption.placement = "top")
+@
+
+\begin{figure}
+\begin{center}
+<<label = fig:rawdiv, echo = FALSE, fig = TRUE, results = HIDE, height = 6>>=
+#community partitioned by sample
+comm <- read.csv("sievedPCA.csv")
+
+#reorder factors
+comm$site <- factor(comm$site, levels = c("DC", "WI", "RP", "NB", "CB")) 
+comm$time <- factor(comm$time, levels = c("May","August"))
+
+#identify and remove empty rows
+empties <- rowSums(comm[!names(comm)%in%c("site","time","Sample")])==0
+comm <- comm[which(!empties),]
+
+### simpson's diversity RAW
+
+#create simpsons diversity column
+comm$div <- diversity(comm[!names(comm)%in%c("site","time","Sample")], 
+                      index = "simpson")
+
+#simplify diversity dataframe
+commdiv <- comm[,c(1,2,58)]
+
+#commdiv.lm <- lm(div ~ site*time, data = commdiv)
+#shapiro.test(commdiv.lm$residuals)
+#Shapiro-Wilk normality test
+#data:  commdiv.lm$residuals
+#W = 0.9604, p-value = 0.0002172
+
+commdiv$offset <- 100
+
+commdiv$div <- round(comm$div, 2)
+
+commdiv$scaled.div <- commdiv$div * 100
+
+div.glm <- glm(scaled.div ~ site*time + offset(offset), data = commdiv, family = "poisson")
+div.aov <- anova(div.glm, test = "Chi")
+div.aov <- as.matrix(div.aov)
+
+diva <- subset(commdiv, time == "May")
+dive <- subset(commdiv, time == "August")
+
+diva.glm <- glm(scaled.div ~ site + offset(offset), data = diva, family = "poisson")
+diva.tuk <- glht(diva.glm, linfct = mcp(site = "Tukey"))
+summary(diva.tuk)
+#   Simultaneous Tests for General Linear Hypotheses
+
+#Multiple Comparisons of Means: Tukey Contrasts
+
+#Fit: glm(formula = scaled.div ~ site + offset(offset), family = "poisson", 
+#    data = diva)
+
+#Linear Hypotheses:
+#              Estimate Std. Error z value Pr(>|z|)    
+#WI - DC == 0  0.312774   0.043500   7.190  < 0.001 ***
+#RP - DC == 0 -0.169594   0.049740  -3.410  0.00571 ** 
+#NB - DC == 0 -0.108401   0.048072  -2.255  0.15900    
+#CB - DC == 0 -0.006799   0.047609  -0.143  0.99991    
+#RP - WI == 0 -0.482369   0.046697 -10.330  < 0.001 ***
+#NB - WI == 0 -0.421175   0.044915  -9.377  < 0.001 ***
+#CB - WI == 0 -0.319573   0.044419  -7.194  < 0.001 ***
+#NB - RP == 0  0.061193   0.050983   1.200  0.75031    
+#CB - RP == 0  0.162795   0.050546   3.221  0.01109 *  
+#CB - NB == 0  0.101602   0.048905   2.078  0.22880    
+#---
+#Signif. codes:  0 ‘***’ 0.001 ‘**’ 0.01 ‘*’ 0.05 ‘.’ 0.1 ‘ ’ 1
+#(Adjusted p values reported -- single-step method)
+
+dive.glm <- glm(scaled.div ~ site + offset(offset), data = dive, family = "poisson")
+dive.tuk <- glht(dive.glm, linfct = mcp(site = "Tukey"))
+summary(dive.tuk)
+#   Simultaneous Tests for General Linear Hypotheses
+
+#Multiple Comparisons of Means: Tukey Contrasts
+
+#Fit: glm(formula = scaled.div ~ site + offset(offset), family = "poisson", 
+#    data = dive)
+
+#Linear Hypotheses:
+#             Estimate Std. Error z value Pr(>|z|)    
+#WI - DC == 0  0.19761    0.04675   4.227   <0.001 ***
+#RP - DC == 0  0.07839    0.05066   1.547   0.5306    
+#NB - DC == 0  0.10570    0.04850   2.179   0.1870    
+#CB - DC == 0  0.32074    0.04551   7.047   <0.001 ***
+#RP - WI == 0 -0.11922    0.04849  -2.459   0.0999 .  
+#NB - WI == 0 -0.09191    0.04623  -1.988   0.2709    
+#CB - WI == 0  0.12313    0.04308   2.858   0.0344 *  
+#NB - RP == 0  0.02731    0.05018   0.544   0.9826    
+#CB - RP == 0  0.24236    0.04730   5.124   <0.001 ***
+#CB - NB == 0  0.21505    0.04498   4.781   <0.001 ***
+#---
+#Signif. codes:  0 ‘***’ 0.001 ‘**’ 0.01 ‘*’ 0.05 ‘.’ 0.1 ‘ ’ 1
+#(Adjusted p values reported -- single-step method)
+
+n.groups <- 5
+
+# comparison matrix- rows are panels, columns are groups
+# these are computed elsewhere
+comparison.matrix <- rbind(
+  c('B','C','A','AB','B'),
+  c('A','B','AB','AB','C')
+)
+
+rawdiv <- bwplot(div~site|time, data = commdiv, ylab = "Diversity", xlab = "Sites",
+        subscripts=TRUE, notch=FALSE,
+       strip=TRUE, aspect = 1.35, scales = list(x = list(draw = TRUE)),
+       par.settings=list(plot.symbol=list(col=1, cex=0.75), 
+                         box.dot=list(cex=0.75), box.rectangle=list(col=1), box.umbrella=list(col=1, lty = 1)), ylim = c(0.1,1.1),
+       panel=function(x, y, n=n.groups, cm=comparison.matrix, ...) {
+         # basic bwplot
+         panel.bwplot(x, y, ...)
+         # compute offset from top of 'umbrella'
+         y.offset <- tapply(y, x, function(i) boxplot.stats(i)$stats[5])
+         # add text just above offset, by panel number
+         panel.text(1:n, y.offset + 0.07, cm[packet.number(), ], font=2)
+       })
+
+print(rawdiv)
+
+@
+\end{center}
+\caption{Simpson's Index of raw species data diversity across all sites in May and August 2012. All pairwise comparisons are within time period among sites (General Linear Hypotheses, p < 0.05).}
+\label{fig:rawdiv}
+\end{figure}
+
+
+\begin{figure}
+\begin{center}
+<<label = fig:raweven, echo = FALSE, fig = TRUE, results = HIDE>>=
+
+comm <- read.csv("sievedPCA.csv")
+
+#reorder factors
+comm$site <- factor(comm$site, levels = c("DC", "WI", "RP", "NB", "CB")) 
+comm$time <- factor(comm$time, levels = c("May","August"))
+#identify and remove empty rows
+
+empties <- rowSums(comm[!names(comm)%in%c("site","time","Sample")])==0
+comm <- comm[which(!empties),]
+
+comm$even <- even(comm[!names(comm)%in%c("site","time","Sample")])
+
+n.groups <- 5
+
+# comparison matrix- rows are panels, columns are groups
+# these are computed elsewhere
+comparison.matrixag <- rbind(
+  c('A','D','B','A','C'),
+  c('A','A','A','B','C')
+)
+
+raweven <- bwplot(even~site|time, data = comm, xlab = "Sites", ylab = "Simpson's Evenness",
+       subscripts=TRUE, notch=FALSE,
+       strip=TRUE, aspect = 1.35, scales = list(x = list(draw = TRUE)),
+       par.settings=list(plot.symbol=list(col=1, cex=0.75), 
+                         box.dot=list(cex=0.75), box.rectangle=list(col=1), box.umbrella=list(col=1, lty = 1)),
+       panel=function(x, y, n=n.groups, cm=comparison.matrixag, ...) {
+         # basic bwplot
+         panel.bwplot(x, y, ...)
+         # compute offset from top of 'umbrella'
+         y.offset <- tapply(y, x, function(i) boxplot.stats(i)$stats[5])
+         # add text just above offset, by panel number
+         panel.text(1:n, y.offset + 0.03, cm[packet.number(), ], font=2)
+       })
+
+print(raweven)
+
+###ANOVA and Tukey in table:raweven below
+
+@
+\end{center}
+\caption{Average community evenness, Simpson's Evenness measure of all sites in May and August with raw species data. All pairwise comparisons are within time period among sites (General Linear Hypotheses, p < 0.05).}
+\label{fig:raweven}
+\end{figure}
+
+<<label = table:raweven, echo = FALSE, results = tex>>=
+
+comm <- read.csv("sievedPCA.csv")
+
+#reorder factors
+comm$site <- factor(comm$site, levels = c("DC", "WI", "RP", "NB", "CB")) 
+comm$time <- factor(comm$time, levels = c("May","August"))
+#identify and remove empty rows
+
+empties <- rowSums(comm[!names(comm)%in%c("site","time","Sample")])==0
+comm <- comm[which(!empties),]
+
+####EVENNESS
+
+evenness <- even(comm[!names(comm)%in%c("site","time","Sample")])
+site <- comm$site
+time <- comm$time
+evencomm <- data.frame(evenness, site, time)
+
+#ANOVA
+
+#even.lm <- lm(evenness ~ site*time, data = evencomm)
+#shapiro.test(even.lm$residuals)
+
+evencomm$offset <- 100
+
+evencomm$evenness <- round(evencomm$evenness, 2)
+
+evencomm$scaled.even <- evencomm$evenness * 100
+
+raweven.glm <- glm(scaled.even ~ site*time + offset(offset), data = evencomm, family = "poisson")
+raweven.aov <- anova(raweven.glm, test = "Chi")
+raweven.aov <- as.matrix(raweven.aov)
+
+#rawevena <- subset(evencomm, time == "May")
+#rawevene <- subset(evencomm, time == "August")
+
+#rawevena.glm <- glm(scaled.even ~ site + offset(offset), data = rawevena, family = "poisson")
+#rawevena.tuk <- glht(rawevena.glm, linfct = mcp(site = "Tukey"))
+#summary(rawevena.tuk)
+#   Simultaneous Tests for General Linear Hypotheses
+
+#Multiple Comparisons of Means: Tukey Contrasts
+
+#Fit: glm(formula = scaled.even ~ site + offset(offset), family = "poisson", 
+#    data = rawevena)
+
+#Linear Hypotheses:
+#              Estimate Std. Error z value Pr(>|z|)    
+#WI - DC == 0  0.562661   0.050769  11.083   <0.001 ***
+#RP - DC == 0 -0.175579   0.061071  -2.875   0.0326 *  
+#NB - DC == 0  0.004914   0.057236   0.086   1.0000    
+#CB - DC == 0  0.354681   0.053577   6.620   <0.001 ***
+#RP - WI == 0 -0.738240   0.054983 -13.427   <0.001 ***
+#NB - WI == 0 -0.557747   0.050690 -11.003   <0.001 ***
+#CB - WI == 0 -0.207980   0.046518  -4.471   <0.001 ***
+#NB - RP == 0  0.180493   0.061005   2.959   0.0253 *  
+#CB - RP == 0  0.530260   0.057586   9.208   <0.001 ***
+#CB - NB == 0  0.349767   0.053502   6.537   <0.001 ***
+#---
+#Signif. codes:  0 ‘***’ 0.001 ‘**’ 0.01 ‘*’ 0.05 ‘.’ 0.1 ‘ ’ 1
+#(Adjusted p values reported -- single-step method)
+
+#rawevene.glm <- glm(scaled.even ~ site + offset(offset), data = rawevene, family = "poisson")
+#rawevene.tuk <- glht(rawevene.glm, linfct = mcp(site = "Tukey"))
+
+#summary(rawevene.tuk)
+
+#   Simultaneous Tests for General Linear Hypotheses
+
+#Multiple Comparisons of Means: Tukey Contrasts
+
+#Fit: glm(formula = scaled.even ~ site + offset(offset), family = "poisson", 
+#    data = rawevene)
+
+#Linear Hypotheses:
+#             Estimate Std. Error z value Pr(>|z|)    
+#WI - DC == 0 -0.05256    0.07866  -0.668  0.96259    
+#RP - DC == 0  0.12282    0.07931   1.548  0.52687    
+#NB - DC == 0  0.51707    0.07020   7.366  < 0.001 ***
+#CB - DC == 0  0.71696    0.06695  10.708  < 0.001 ***
+#RP - WI == 0  0.17538    0.08033   2.183  0.18342    
+#NB - WI == 0  0.56963    0.07135   7.984  < 0.001 ***
+#CB - WI == 0  0.76952    0.06816  11.291  < 0.001 ***
+#NB - RP == 0  0.39425    0.07207   5.470  < 0.001 ***
+#CB - RP == 0  0.59414    0.06891   8.621  < 0.001 ***
+#CB - NB == 0  0.19989    0.05819   3.435  0.00523 ** 
+#---
+#Signif. codes:  0 ‘***’ 0.001 ‘**’ 0.01 ‘*’ 0.05 ‘.’ 0.1 ‘ ’ 1
+#(Adjusted p values reported -- single-step method)
+
+print(xtable(raweven.aov, caption = "ANODE-Chi of raw species evenness by site and time.", label = "table:raweven", digits = c(0,0,2,2,3,4), table.placement = "tbp"), caption.placement = "top")
+@
+
+\begin{figure}
+\begin{center}
+<<label = fig:rawbeta, echo = FALSE, fig = TRUE, resutls = HIDE, height = 5>>=
+
+par(mfrow = c(1,2))
+
+comm <- read.csv("sievedPCA.csv")
+
+#reorder factors
+comm$site <- factor(comm$site, levels = c("DC", "WI", "RP", "NB", "CB")) 
+comm$time <- factor(comm$time, levels = c("May","August"))
+
+#identify and remove empty rows
+empties <- rowSums(comm[!names(comm)%in%c("site","time","Sample")])==0
+comm <- comm[which(!empties),]
+
+#str(comm)
+commA <- subset(comm, time == "May")
+commE <- subset(comm, time == "August")
+
+
+####################bray beta full MAY-----
+
+braycommA <- vegdist(commA[!names(commA)%in%c("site","time","Sample")], method = "bray")
+locA <- commA$site
+brayA <- with(commA,betadisper(braycommA,locA))
+#scores(brayA)
+#TukeyHSD(brayA)
+par(mar = c(3,2,2,0.5))
+plot(brayA, main = "May", ylim = c(-0.4,0.5), xlim = c(-0.5,0.5))
+text(-0.4, 0.1, "DC")
+text(-0.4, -0.25, "RP")
+text(0.1, 0.55, "WI")
+text(0.4, 0.15, "NB")
+text(0.4, -0.42, "CB")
+#eigA <- brayA$eig
+#eigA/sum(eigA)
+#PCoA1 = 0.35, PCoA2 = 0.15
+
+##################bray beta full AUGUST
+
+
+braycommE <- vegdist(commE[!names(commA)%in%c("site","time","Sample")], method = "bray")
+locE <- commE$site
+brayE <- with(commE,betadisper(braycommE,locE))
+#scores(brayE)
+#TukeyHSD(brayE)
+plot(brayE, main = "August", ylim = c(-0.4,0.5), xlim = c(-0.5,0.5), yaxt = 'n')
+text(-0.45, 0.3, "DC")
+text(-0.35, -0.2, "RP")
+text(-0.2, -0.4, "WI")
+text(0.425, -0.2, "CB")
+text(0.3, 0.35, "NB")
+#eig <- brayE$eig
+#eig/sum(eig)
+#PCoA1 = 0.36, PCoA2 = 0.15
+
+@
+\end{center}
+\caption{Beta diversity as Bray-Curtis distance for each site and time with raw species data.}
+\label{fig:rawbeta}
+\end{figure}
+
+\begin{figure}
+\begin{center}
+<<label = fig:rawbetabar, fig = TRUE, echo = FALSE, results = HIDE>>=
+
+#uses analdata from fig:beta
+par(mfrow = c(1,2))
+par(mar = c(3,2,2,0.5))
+
+boxplot(brayA, main = "May", xlab = "", ylim =c(0.0,0.8), lty =1)
+text(5, 0.8, "A", cex = 1.5)
+text(1,0.45, "A")
+text(2,0.67, "B")
+text(3,0.53, "A")
+text(4,0.65, "A")
+text(5,0.50, "A")
+boxplot(brayE, main = "August", xlab = "", yaxt = 'n',ylim = c(0.0,0.8), lty =1)
+text(4.5, 0.8, "B", cex = 1.5)
+text(1,0.5, "A")
+text(2,0.65, "AB")
+text(3,0.8, "AB")
+text(4,0.48, "AB")
+text(5,0.68, "B")
+mtext("     Sites", side = 1, line = -1, outer = TRUE, cex = 1.5)
+
+@
+\end{center}
+\caption{Mean distance to centroid, Bray-Curtis beta diversity of all sites in May (A) and August (B). Differences in variation among sites within each time detected with post-hoc Tukey (p < 0.05).}
+\label{fig:rawbetabar}
+\end{figure}
+
+\section{Community Composition}
+
+\begin{landscape}
+% Table generated by Excel2LaTeX from sheet 'Sheet1'
+\begin{center}
+\begin{longtable}{rcccccc}
+\caption{Similarity percentage analysis of raw species data with pairwise comparisons between sites and times.} 
+\label{table:RawSim} \\ \hline 
+
+\multicolumn{7}{ |c| }{Raw SIMPER} \\ \hline
+\endfirsthead
+
+\multicolumn{7}{c}%
+{{\bfseries \tablename\ \thetable{} -- continued from previous page}} \\
+\hline \multicolumn{7}{ |c| }{Raw SIMPER} \\ \hline
+\endhead
+
+\hline \multicolumn{7}{|r|}{{Continued on next page}} \\ \hline
+\endfoot
+
+\hline \hline
+\endlastfoot
+
+    \hline \\
+    Groups DC  \&  WI &       &       &       &       &       &  \\
+    Average dissimilarity = 62.10 &       &       &       &       &       &  \\
+          &       &       &       &       &       &  \\
+          & Group DC & Group WI &       &       &       &  \\
+    Species & Av.Abund & Av.Abund & Av.Diss & Diss/SD & Contrib\% & Cum.\% \\ \hline
+    \textit{Caprella sp.} & 3.45  & 1.72  & 6.79  & 1.31  & 10.93 & 10.93 \\
+    \textit{Phyllaplysia taylori} & 2.82  & 0.54  & 6.10  & 1.67  & 9.83  & 20.76 \\
+    \textit{Aoroides columbidae} & 2.01  & 1.10  & 4.15  & 1.04  & 6.68  & 27.44 \\
+    \textit{Mytilus spp.} & 0.37  & 2.16  & 4.05  & 1.13  & 6.52  & 33.95 \\
+    Nereid C & 0.55  & 1.00  & 2.77  & 0.99  & 4.46  & 38.41 \\
+    Unidentified Amph 2 & 1.05  & 0.50  & 2.65  & 1.03  & 4.27  & 42.69 \\
+    \textit{Photis brevipes} & 0.91  & 1.05  & 2.50  & 0.91  & 4.03  & 46.72 \\
+    Tubeworm & 0.00  & 1.20  & 2.47  & 0.96  & 3.98  & 50.70 \\
+    \textit{Corophium sp.} & 0.24  & 0.79  & 2.45  & 0.88  & 3.94  & 54.64 \\
+    \textit{Lacuna spp.} & 0.21  & 0.66  & 2.26  & 1.04  & 3.65  & 58.29 \\
+    Nematode A & 0.06  & 0.44  & 2.22  & 0.68  & 3.57  & 61.86 \\
+    Unidentified \textit{Bivalvia} & 0.03  & 0.81  & 2.08  & 0.95  & 3.35  & 65.22 \\
+    \textit{Idotea resecata} & 1.20  & 1.12  & 1.88  & 0.77  & 3.03  & 68.25 \\
+    \textit{Amphithoe sp.} & 0.14  & 0.69  & 1.87  & 0.84  & 3.02  & 71.27 \\
+    \textit{Cirolana sp.} & 0.00  & 0.52  & 1.79  & 0.85  & 2.88  & 74.15 \\
+    \textit{Tanaidacea} & 0.31  & 0.30  & 1.68  & 0.76  & 2.71  & 76.85 \\
+    \textit{Eogammarus confervicolus} & 0.28  & 0.35  & 1.67  & 0.69  & 2.69  & 79.54 \\
+    Nereid B & 0.83  & 1.06  & 1.32  & 0.68  & 2.12  & 81.66 \\
+    Nereid D & 0.08  & 0.49  & 1.21  & 0.58  & 1.94  & 83.60 \\
+    \textit{Copepoda} & 0.00  & 0.21  & 1.06  & 0.46  & 1.70  & 85.30 \\
+    \textit{Pycnogonida} & 0.06  & 0.43  & 0.92  & 0.67  & 1.49  & 86.79 \\
+    \textit{Margarites spp.} & 0.27  & 0.47  & 0.88  & 0.67  & 1.42  & 88.21 \\
+    Nereid H & 0.07  & 0.13  & 0.81  & 0.42  & 1.31  & 89.53 \\
+    \textit{Pugettia spp.} & 0.22  & 0.09  & 0.62  & 0.49  & 1.00  & 90.53 \\ \hline
+          &       &       &       &       &       &  \\
+    Groups DC  \&  RP &       &       &       &       &       &  \\
+    Average dissimilarity = 56.08 &       &       &       &       &       &  \\
+          &       &       &       &       &       &  \\
+          & Group DC & Group RP &       &       &       &  \\
+    Species & Av.Abund & Av.Abund & Av.Diss & Diss/SD & Contrib\% & Cum.\% \\ \hline
+    \textit{Phyllaplysia taylori} & 2.82  & 1.92  & 5.59  & 0.81  & 9.97  & 9.97 \\
+    \textit{Aoroides columbidae} & 2.01  & 1.03  & 5.11  & 1.03  & 9.11  & 19.08 \\
+    \textit{Caprella sp.} & 3.45  & 2.65  & 4.84  & 0.69  & 8.63  & 27.72 \\
+    Unidentified Amph 2 & 1.05  & 0.03  & 3.88  & 1.36  & 6.92  & 34.63 \\
+    \textit{Idotea resecata} & 1.20  & 0.53  & 3.69  & 1.22  & 6.59  & 41.22 \\
+    Nereid C & 0.55  & 1.00  & 3.40  & 1.32  & 6.07  & 47.28 \\
+    Nereid D & 0.08  & 0.71  & 3.30  & 0.96  & 5.89  & 53.18 \\
+    \textit{Photis brevipes} & 0.91  & 0.41  & 3.11  & 1.03  & 5.55  & 58.72 \\
+    Tubeworm & 0.00  & 0.90  & 2.99  & 1.05  & 5.34  & 64.06 \\
+    Nereid B & 0.83  & 0.37  & 2.68  & 0.99  & 4.79  & 68.85 \\
+    \textit{Mytilus spp.} & 0.37  & 1.01  & 2.01  & 0.75  & 3.58  & 72.42 \\
+    \textit{Tanaidacea} & 0.31  & 0.44  & 1.85  & 0.80  & 3.30  & 75.72 \\
+    \textit{Lacuna spp.} & 0.21  & 0.27  & 1.56  & 0.67  & 2.79  & 78.51 \\
+    \textit{Eogammarus confervicolus} & 0.28  & 0.03  & 1.39  & 0.55  & 2.48  & 80.99 \\
+    \textit{Corophium sp.} & 0.24  & 0.04  & 1.20  & 0.52  & 2.13  & 83.12 \\
+    Nematode B & 0.00  & 0.51  & 1.16  & 0.61  & 2.07  & 85.19 \\
+    \textit{Pugettia spp.} & 0.22  & 0.03  & 0.79  & 0.46  & 1.41  & 86.61 \\
+    \textit{Amphithoe sp.} & 0.14  & 0.06  & 0.78  & 0.40  & 1.39  & 88.00 \\
+    \textit{Margarites spp.} & 0.27  & 0.00  & 0.73  & 0.53  & 1.30  & 89.30 \\
+    Unidentified \textit{Bivalvia} & 0.03  & 0.22  & 0.59  & 0.44  & 1.04  & 90.34 \\ \hline
+          &       &       &       &       &       &  \\
+    Groups WI  \&  RP &       &       &       &       &       &  \\
+    Average dissimilarity = 69.29 &       &       &       &       &       &  \\
+          &       &       &       &       &       &  \\
+          & Group WI & Group RP &       &       &       &  \\
+    Species & Av.Abund & Av.Abund & Av.Diss & Diss/SD & Contrib\% & Cum.\% \\ \hline
+    \textit{Caprella sp.} & 1.72  & 2.65  & 7.34  & 1.24  & 10.59 & 10.59 \\
+    \textit{Phyllaplysia taylori} & 0.54  & 1.92  & 4.68  & 1.48  & 6.75  & 17.34 \\
+    Nereid D & 0.49  & 0.71  & 4.38  & 1.25  & 6.32  & 23.66 \\
+    Tubeworm & 1.20  & 0.90  & 3.71  & 1.08  & 5.36  & 29.02 \\
+    \textit{Mytilus spp.} & 2.16  & 1.01  & 3.52  & 0.79  & 5.08  & 34.10 \\
+    \textit{Aoroides columbidae} & 1.10  & 1.03  & 3.34  & 0.94  & 4.82  & 38.91 \\
+    \textit{Idotea resecata} & 1.12  & 0.53  & 3.27  & 0.96  & 4.72  & 43.64 \\
+    \textit{Corophium sp.} & 0.79  & 0.04  & 3.12  & 0.93  & 4.50  & 48.13 \\
+    Nereid C & 1.00  & 1.00  & 2.96  & 0.99  & 4.27  & 52.41 \\
+    \textit{Photis brevipes} & 1.05  & 0.41  & 2.81  & 1.01  & 4.05  & 56.46 \\
+    Nereid B & 1.06  & 0.37  & 2.77  & 1.01  & 3.99  & 60.45 \\
+    Nematode A & 0.44  & 0.03  & 2.37  & 0.63  & 3.42  & 63.87 \\
+    Unidentified \textit{Bivalvia} & 0.81  & 0.22  & 2.32  & 0.92  & 3.34  & 67.21 \\
+    \textit{Lacuna spp.} & 0.66  & 0.27  & 2.13  & 0.86  & 3.07  & 70.29 \\
+    \textit{Amphithoe sp.} & 0.69  & 0.06  & 2.12  & 0.89  & 3.06  & 73.35 \\
+    \textit{Tanaidacea} & 0.30  & 0.44  & 1.99  & 0.78  & 2.87  & 76.22 \\
+    \textit{Cirolana sp.} & 0.52  & 0.00  & 1.98  & 0.82  & 2.86  & 79.08 \\
+    \textit{Eogammarus confervicolus} & 0.35  & 0.03  & 1.46  & 0.58  & 2.11  & 81.19 \\
+    Unidentified Amph 2 & 0.50  & 0.03  & 1.42  & 0.76  & 2.05  & 83.24 \\
+    \textit{Copepoda} & 0.21  & 0.00  & 1.18  & 0.44  & 1.71  & 84.95 \\
+    \textit{Margarites spp.} & 0.47  & 0.00  & 1.09  & 0.59  & 1.57  & 86.52 \\
+    \textit{Pycnogonida} & 0.43  & 0.06  & 1.07  & 0.64  & 1.54  & 88.06 \\
+    Nematode B & 0.00  & 0.51  & 1.01  & 0.61  & 1.46  & 89.52 \\
+    Nereid H & 0.13  & 0.03  & 0.75  & 0.39  & 1.08  & 90.60 \\ \hline
+          &       &       &       &       &       &  \\
+    Groups DC  \&  NB &       &       &       &       &       &  \\
+    Average dissimilarity = 69.34 &       &       &       &       &       &  \\
+          &       &       &       &       &       &  \\
+          & Group DC & Group NB &       &       &       &  \\
+    Species & Av.Abund & Av.Abund & Av.Diss & Diss/SD & Contrib\% & Cum.\% \\ \hline
+    \textit{Caprella sp.} & 3.45  & 0.79  & 10.58 & 2.40  & 15.26 & 15.26 \\
+    \textit{Phyllaplysia taylori} & 2.82  & 0.00  & 9.79  & 1.60  & 14.12 & 29.38 \\
+    \textit{Aoroides columbidae} & 2.01  & 0.28  & 7.27  & 1.92  & 10.48 & 39.86 \\
+    \textit{Mytilus spp.} & 0.37  & 1.74  & 5.53  & 1.81  & 7.97  & 47.84 \\
+    \textit{Idotea resecata} & 1.20  & 1.85  & 4.24  & 0.95  & 6.12  & 53.95 \\
+    Unidentified Amph 2 & 1.05  & 0.46  & 3.22  & 1.16  & 4.64  & 58.59 \\
+    \textit{Photis brevipes} & 0.91  & 1.08  & 2.76  & 0.99  & 3.97  & 62.57 \\
+    \textit{Acari} & 0.00  & 0.53  & 2.65  & 0.72  & 3.83  & 66.40 \\
+    Nematode A & 0.06  & 0.86  & 2.59  & 0.91  & 3.74  & 70.14 \\
+    Nereid B & 0.83  & 0.57  & 2.21  & 0.85  & 3.19  & 73.33 \\
+    Nereid C & 0.55  & 0.20  & 2.10  & 0.87  & 3.03  & 76.36 \\
+    \textit{Tanaidacea} & 0.31  & 0.30  & 1.95  & 0.79  & 2.81  & 79.17 \\
+    \textit{Corophium sp.} & 0.24  & 0.25  & 1.51  & 0.64  & 2.18  & 81.35 \\
+    \textit{Eogammarus confervicolus} & 0.28  & 0.03  & 1.39  & 0.56  & 2.01  & 83.36 \\
+    \textit{Lacuna spp.} & 0.21  & 0.20  & 1.39  & 0.58  & 2.00  & 85.36 \\
+    \textit{Copepoda} & 0.00  & 0.25  & 1.24  & 0.37  & 1.79  & 87.15 \\
+    \textit{Amphithoe sp.} & 0.14  & 0.20  & 1.09  & 0.53  & 1.57  & 88.72 \\
+    \textit{Pugettia spp.} & 0.22  & 0.00  & 0.82  & 0.49  & 1.18  & 89.90 \\
+    \textit{Margarites spp.} & 0.27  & 0.00  & 0.79  & 0.56  & 1.14  & 91.04 \\ \hline
+          &       &       &       &       &       &  \\
+    Groups WI  \&  NB &       &       &       &       &       &  \\
+    Average dissimilarity = 65.52 &       &       &       &       &       &  \\
+          &       &       &       &       &       &  \\
+          & Group WI & Group NB &       &       &       &  \\
+    Species & Av.Abund & Av.Abund & Av.Diss & Diss/SD & Contrib\% & Cum.\% \\ \hline
+    \textit{Mytilus spp.} & 2.16  & 1.74  & 4.59  & 1.34  & 7.01  & 7.01 \\
+    \textit{Idotea resecata} & 1.12  & 1.85  & 4.42  & 1.01  & 6.75  & 13.75 \\
+    Nematode A & 0.44  & 0.86  & 4.22  & 1.34  & 6.45  & 20.20 \\
+    \textit{Caprella sp.} & 1.72  & 0.79  & 4.10  & 1.31  & 6.25  & 26.45 \\
+    Nereid C & 1.00  & 0.20  & 3.77  & 1.20  & 5.76  & 32.21 \\
+    \textit{Aoroides columbidae} & 1.10  & 0.28  & 3.39  & 1.23  & 5.18  & 37.39 \\
+    Tubeworm & 1.20  & 0.00  & 3.11  & 0.94  & 4.75  & 42.14 \\
+    \textit{Corophium sp.} & 0.79  & 0.25  & 2.88  & 0.94  & 4.40  & 46.54 \\
+    Unidentified \textit{Bivalvia} & 0.81  & 0.10  & 2.60  & 1.04  & 3.97  & 50.51 \\
+    \textit{Acari} & 0.07  & 0.53  & 2.59  & 0.69  & 3.95  & 54.46 \\
+    \textit{Photis brevipes} & 1.05  & 1.08  & 2.49  & 0.87  & 3.81  & 58.27 \\
+    \textit{Lacuna spp.} & 0.66  & 0.20  & 2.48  & 1.02  & 3.78  & 62.05 \\
+    Nereid B & 1.06  & 0.57  & 2.42  & 0.94  & 3.70  & 65.75 \\
+    \textit{Cirolana sp.} & 0.52  & 0.09  & 2.00  & 0.84  & 3.06  & 68.81 \\
+    \textit{Copepoda} & 0.21  & 0.25  & 1.92  & 0.53  & 2.94  & 71.74 \\
+    \textit{Amphithoe sp.} & 0.69  & 0.20  & 1.86  & 0.79  & 2.84  & 74.58 \\
+    \textit{Tanaidacea} & 0.30  & 0.30  & 1.81  & 0.66  & 2.76  & 77.34 \\
+    Unidentified Amph 2 & 0.50  & 0.46  & 1.71  & 0.85  & 2.61  & 79.95 \\
+    Nereid D & 0.49  & 0.04  & 1.47  & 0.57  & 2.24  & 82.19 \\
+    \textit{Eogammarus confervicolus} & 0.35  & 0.03  & 1.47  & 0.60  & 2.24  & 84.44 \\
+    \textit{Phyllaplysia taylori} & 0.54  & 0.00  & 1.34  & 0.73  & 2.04  & 86.48 \\
+    \textit{Margarites spp.} & 0.47  & 0.00  & 1.18  & 0.61  & 1.79  & 88.27 \\
+    \textit{Pycnogonida} & 0.43  & 0.00  & 1.17  & 0.68  & 1.78  & 90.06 \\ \hline
+          &       &       &       &       &       &  \\
+    Groups RP  \&  NB &       &       &       &       &       &  \\
+    Average dissimilarity = 78.20 &       &       &       &       &       &  \\
+          &       &       &       &       &       &  \\
+          & Group RP & Group NB &       &       &       &  \\
+    Species & Av.Abund & Av.Abund & Av.Diss & Diss/SD & Contrib\% & Cum.\% \\ \hline
+    \textit{Caprella sp.} & 2.65  & 0.79  & 9.77  & 1.91  & 12.49 & 12.49 \\
+    \textit{Idotea resecata} & 0.53  & 1.85  & 7.55  & 1.14  & 9.66  & 22.15 \\
+    \textit{Phyllaplysia taylori} & 1.92  & 0.00  & 6.78  & 1.35  & 8.66  & 30.82 \\
+    \textit{Mytilus spp.} & 1.01  & 1.74  & 6.23  & 0.99  & 7.97  & 38.78 \\
+    Nereid C & 1.00  & 0.20  & 4.24  & 1.29  & 5.42  & 44.21 \\
+    \textit{Photis brevipes} & 0.41  & 1.08  & 4.17  & 1.03  & 5.33  & 49.53 \\
+    \textit{Aoroides columbidae} & 1.03  & 0.28  & 4.13  & 1.15  & 5.29  & 54.82 \\
+    Nereid D & 0.71  & 0.04  & 3.66  & 0.92  & 4.68  & 59.50 \\
+    Tubeworm & 0.90  & 0.00  & 3.57  & 1.07  & 4.56  & 64.06 \\
+    Nematode A & 0.03  & 0.86  & 3.51  & 0.79  & 4.49  & 68.55 \\
+    \textit{Acari} & 0.00  & 0.53  & 3.03  & 0.66  & 3.88  & 72.43 \\
+    Nereid B & 0.37  & 0.57  & 2.94  & 0.90  & 3.76  & 76.18 \\
+    \textit{Tanaidacea} & 0.44  & 0.30  & 2.41  & 0.81  & 3.08  & 79.27 \\
+    Unidentified Amph 2 & 0.03  & 0.46  & 2.04  & 0.78  & 2.60  & 81.87 \\
+    \textit{Lacuna spp.} & 0.27  & 0.20  & 1.69  & 0.67  & 2.16  & 84.03 \\
+    Nematode B & 0.51  & 0.00  & 1.50  & 0.61  & 1.92  & 85.95 \\
+    \textit{Copepoda} & 0.00  & 0.25  & 1.38  & 0.35  & 1.76  & 87.72 \\
+    \textit{Corophium sp.} & 0.04  & 0.25  & 1.38  & 0.54  & 1.76  & 89.48 \\
+    \textit{Amphithoe sp.} & 0.06  & 0.20  & 1.11  & 0.51  & 1.42  & 90.90 \\ \hline
+          &       &       &       &       &       &  \\
+    Groups DC  \&  CB &       &       &       &       &       &  \\
+    Average dissimilarity = 74.86 &       &       &       &       &       &  \\
+          &       &       &       &       &       &  \\
+          & Group DC & Group CB &       &       &       &  \\
+    Species & Av.Abund & Av.Abund & Av.Diss & Diss/SD & Contrib\% & Cum.\% \\ \hline
+    \textit{Caprella sp.} & 3.45  & 0.80  & 10.92 & 1.89  & 14.59 & 14.59 \\
+    \textit{Phyllaplysia taylori} & 2.82  & 0.00  & 9.38  & 1.68  & 12.53 & 27.12 \\
+    \textit{Aoroides columbidae} & 2.01  & 0.22  & 8.17  & 1.67  & 10.92 & 38.04 \\
+    \textit{Pycnogonida} & 0.06  & 1.49  & 6.82  & 1.33  & 9.11  & 47.15 \\
+    Unidentified Amph 2 & 1.05  & 0.40  & 3.54  & 1.13  & 4.73  & 51.88 \\
+    \textit{Idotea resecata} & 1.20  & 1.39  & 3.14  & 0.83  & 4.19  & 56.07 \\
+    \textit{Tanaidacea} & 0.31  & 1.09  & 3.09  & 1.11  & 4.13  & 60.20 \\
+    \textit{Photis brevipes} & 0.91  & 0.73  & 3.07  & 0.93  & 4.11  & 64.31 \\
+    Nereid B & 0.83  & 0.25  & 2.56  & 0.94  & 3.41  & 67.73 \\
+    \textit{Mytilus spp.} & 0.37  & 1.18  & 2.37  & 0.82  & 3.17  & 70.89 \\
+    Nereid C & 0.55  & 0.55  & 2.29  & 0.86  & 3.05  & 73.95 \\
+    \textit{Lacuna spp.} & 0.21  & 0.24  & 1.70  & 0.68  & 2.27  & 76.22 \\
+    \textit{Eogammarus confervicolus} & 0.28  & 0.04  & 1.57  & 0.55  & 2.10  & 78.31 \\
+    Nematode A & 0.06  & 0.57  & 1.50  & 0.59  & 2.01  & 80.32 \\
+    \textit{Corophium sp.} & 0.24  & 0.11  & 1.42  & 0.56  & 1.89  & 82.21 \\
+    \textit{Acari} & 0.00  & 0.39  & 1.21  & 0.61  & 1.62  & 83.83 \\
+    \textit{Amphithoe sp.} & 0.14  & 0.10  & 1.00  & 0.43  & 1.33  & 85.17 \\
+    \textit{Lottia pelta} & 0.11  & 0.16  & 0.92  & 0.48  & 1.22  & 86.39 \\
+    \textit{Copepoda} & 0.00  & 0.23  & 0.79  & 0.44  & 1.05  & 87.44 \\
+    \textit{Pugettia spp.} & 0.22  & 0.00  & 0.78  & 0.46  & 1.04  & 88.49 \\
+    \textit{Margarites spp.} & 0.27  & 0.00  & 0.71  & 0.55  & 0.95  & 89.44 \\
+    Nereid D & 0.08  & 0.06  & 0.71  & 0.35  & 0.94  & 90.38 \\ \hline
+          &       &       &       &       &       &  \\
+    Groups WI  \&  CB &       &       &       &       &       &  \\
+    Average dissimilarity = 72.23 &       &       &       &       &       &  \\
+          &       &       &       &       &       &  \\
+          & Group WI & Group CB &       &       &       &  \\
+    Species & Av.Abund & Av.Abund & Av.Diss & Diss/SD & Contrib\% & Cum.\% \\ \hline
+    \textit{Pycnogonida} & 0.43  & 1.49  & 6.54  & 1.07  & 9.06  & 9.06 \\
+    \textit{Caprella sp.} & 1.72  & 0.80  & 4.44  & 1.30  & 6.15  & 15.20 \\
+    Nematode A & 0.44  & 0.57  & 3.93  & 0.97  & 5.44  & 20.65 \\
+    Nereid C & 1.00  & 0.55  & 3.86  & 1.02  & 5.34  & 25.99 \\
+    \textit{Tanaidacea} & 0.30  & 1.09  & 3.63  & 1.32  & 5.03  & 31.02 \\
+    \textit{Aoroides columbidae} & 1.10  & 0.22  & 3.56  & 1.07  & 4.92  & 35.94 \\
+    \textit{Corophium sp.} & 0.79  & 0.11  & 3.43  & 0.92  & 4.75  & 40.69 \\
+    Tubeworm & 1.20  & 0.11  & 3.37  & 1.12  & 4.66  & 45.36 \\
+    \textit{Idotea resecata} & 1.12  & 1.39  & 3.19  & 0.78  & 4.41  & 49.77 \\
+    \textit{Mytilus spp.} & 2.16  & 1.18  & 2.99  & 0.98  & 4.14  & 53.90 \\
+    Nereid B & 1.06  & 0.25  & 2.73  & 0.97  & 3.77  & 57.68 \\
+    Unidentified \textit{Bivalvia} & 0.81  & 0.21  & 2.49  & 0.94  & 3.45  & 61.12 \\
+    \textit{Amphithoe sp.} & 0.69  & 0.10  & 2.33  & 0.92  & 3.23  & 64.36 \\
+    \textit{Photis brevipes} & 1.05  & 0.73  & 2.32  & 0.76  & 3.22  & 67.57 \\
+    \textit{Cirolana sp.} & 0.52  & 0.00  & 2.17  & 0.80  & 3.01  & 70.58 \\
+    \textit{Lacuna spp.} & 0.66  & 0.24  & 1.97  & 0.80  & 2.73  & 73.31 \\
+    \textit{Copepoda} & 0.21  & 0.23  & 1.77  & 0.57  & 2.45  & 75.77 \\
+    \textit{Acari} & 0.07  & 0.39  & 1.68  & 0.44  & 2.33  & 78.10 \\
+    \textit{Eogammarus confervicolus} & 0.35  & 0.04  & 1.65  & 0.58  & 2.29  & 80.38 \\
+    Nereid D & 0.49  & 0.06  & 1.59  & 0.59  & 2.20  & 82.59 \\
+    Unidentified Amph 2 & 0.50  & 0.40  & 1.49  & 0.75  & 2.06  & 84.65 \\
+    \textit{Phyllaplysia taylori} & 0.54  & 0.00  & 1.25  & 0.72  & 1.73  & 86.38 \\
+    \textit{Lottia pelta} & 0.22  & 0.16  & 1.16  & 0.56  & 1.61  & 87.99 \\
+    \textit{Margarites spp.} & 0.47  & 0.00  & 1.07  & 0.61  & 1.48  & 89.47 \\
+    Nereid H & 0.13  & 0.13  & 1.00  & 0.47  & 1.39  & 90.86 \\ \hline
+          &       &       &       &       &       &  \\
+    Groups RP  \&  CB &       &       &       &       &       &  \\
+    Average dissimilarity = 77.51 &       &       &       &       &       &  \\
+          &       &       &       &       &       &  \\
+          & Group RP & Group CB &       &       &       &  \\
+    Species & Av.Abund & Av.Abund & Av.Diss & Diss/SD & Contrib\% & Cum.\% \\ \hline
+    \textit{Caprella sp.} & 2.65  & 0.80  & 10.02 & 1.47  & 12.93 & 12.93 \\
+    \textit{Pycnogonida} & 0.06  & 1.49  & 8.15  & 1.12  & 10.52 & 23.44 \\
+    \textit{Phyllaplysia taylori} & 1.92  & 0.00  & 6.60  & 1.40  & 8.51  & 31.96 \\
+    \textit{Idotea resecata} & 0.53  & 1.39  & 5.72  & 0.91  & 7.38  & 39.34 \\
+    Nereid C & 1.00  & 0.55  & 4.50  & 1.21  & 5.80  & 45.15 \\
+    \textit{Aoroides columbidae} & 1.03  & 0.22  & 4.36  & 1.02  & 5.63  & 50.78 \\
+    \textit{Tanaidacea} & 0.44  & 1.09  & 4.22  & 1.02  & 5.44  & 56.22 \\
+    Nereid D & 0.71  & 0.06  & 3.97  & 0.86  & 5.12  & 61.34 \\
+    Tubeworm & 0.90  & 0.11  & 3.69  & 1.00  & 4.76  & 66.10 \\
+    \textit{Photis brevipes} & 0.41  & 0.73  & 2.71  & 0.71  & 3.49  & 69.59 \\
+    \textit{Mytilus spp.} & 1.01  & 1.18  & 2.70  & 0.52  & 3.48  & 73.07 \\
+    Nematode A & 0.03  & 0.57  & 2.08  & 0.47  & 2.68  & 75.75 \\
+    Nereid B & 0.37  & 0.25  & 1.85  & 0.64  & 2.39  & 78.14 \\
+    \textit{Lacuna spp.} & 0.27  & 0.24  & 1.52  & 0.62  & 1.96  & 80.10 \\
+    Unidentified Amph 2 & 0.03  & 0.40  & 1.46  & 0.62  & 1.89  & 81.99 \\
+    \textit{Acari} & 0.00  & 0.39  & 1.43  & 0.58  & 1.84  & 83.83 \\
+    Nematode B & 0.51  & 0.03  & 1.38  & 0.61  & 1.77  & 85.60 \\
+    Unidentified \textit{Bivalvia} & 0.22  & 0.21  & 1.21  & 0.59  & 1.56  & 87.17 \\
+    \textit{Copepoda} & 0.00  & 0.23  & 0.89  & 0.43  & 1.14  & 88.31 \\
+    \textit{Lottia pelta} & 0.00  & 0.16  & 0.80  & 0.37  & 1.04  & 89.35 \\
+    \textit{Amphithoe sp.} & 0.06  & 0.10  & 0.79  & 0.38  & 1.02  & 90.37 \\ \hline
+          &       &       &       &       &       &  \\
+    Groups NB  \&  CB &       &       &       &       &       &  \\
+    Average dissimilarity = 61.65 &       &       &       &       &       &  \\
+          &       &       &       &       &       &  \\
+          & Group NB & Group CB &       &       &       &  \\
+    Species & Av.Abund & Av.Abund & Av.Diss & Diss/SD & Contrib\% & Cum.\% \\ \hline
+    \textit{Pycnogonida} & 0.00  & 1.49  & 8.19  & 1.35  & 13.29 & 13.29 \\
+    \textit{Mytilus spp.} & 1.74  & 1.18  & 5.18  & 1.07  & 8.39  & 21.69 \\
+    \textit{Tanaidacea} & 0.30  & 1.09  & 4.80  & 1.31  & 7.79  & 29.48 \\
+    \textit{Acari} & 0.53  & 0.39  & 4.10  & 0.84  & 6.65  & 36.12 \\
+    \textit{Idotea resecata} & 1.85  & 1.39  & 3.87  & 0.65  & 6.29  & 42.41 \\
+    \textit{Caprella sp.} & 0.79  & 0.80  & 3.70  & 1.00  & 5.99  & 48.40 \\
+    \textit{Photis brevipes} & 1.08  & 0.73  & 3.29  & 0.89  & 5.33  & 53.73 \\
+    Nematode A & 0.86  & 0.57  & 2.77  & 0.72  & 4.50  & 58.23 \\
+    Nereid B & 0.57  & 0.25  & 2.69  & 0.87  & 4.36  & 62.59 \\
+    Nereid C & 0.20  & 0.55  & 2.22  & 0.77  & 3.60  & 66.20 \\
+    \textit{Copepoda} & 0.25  & 0.23  & 2.22  & 0.50  & 3.59  & 69.79 \\
+    Unidentified Amph 2 & 0.46  & 0.40  & 2.07  & 0.81  & 3.36  & 73.15 \\
+    \textit{Lacuna spp.} & 0.20  & 0.24  & 1.77  & 0.68  & 2.87  & 76.02 \\
+    \textit{Aoroides columbidae} & 0.28  & 0.22  & 1.71  & 0.66  & 2.77  & 78.79 \\
+    \textit{Corophium sp.} & 0.25  & 0.11  & 1.59  & 0.58  & 2.58  & 81.37 \\
+    \textit{Amphithoe sp.} & 0.20  & 0.10  & 1.30  & 0.56  & 2.11  & 83.48 \\
+    Unidentified \textit{Bivalvia} & 0.10  & 0.21  & 1.22  & 0.56  & 1.98  & 85.46 \\
+    \textit{Lottia pelta} & 0.04  & 0.16  & 0.92  & 0.42  & 1.50  & 86.96 \\
+    \textit{Nemertea} & 0.11  & 0.11  & 0.76  & 0.42  & 1.24  & 88.20 \\
+    Nereid D & 0.04  & 0.06  & 0.65  & 0.30  & 1.06  & 89.26 \\
+    \textit{Cirripedia:Sessilia} & 0.13  & 0.07  & 0.64  & 0.42  & 1.04  & 90.30 \\ \hline
+          &       &       &       &       &       &  \\
+    Groups May  \&  August &       &       &       &       &       &  \\
+    Average dissimilarity = 65.27 &       &       &       &       &       &  \\
+          &       &       &       &       &       &  \\
+          & Group May & Group August &       &       &       &  \\
+    Species &  Av.Abund &     Av.Abund & Av.Diss & Diss/SD & Contrib\% & Cum.\% \\ \hline
+    \textit{Mytilus spp.} & 0.27  & 2.31  & 7.48  & 1.65  & 11.46 & 11.46 \\
+    \textit{Caprella sp.} & 1.22  & 2.55  & 6.25  & 1.12  & 9.57  & 21.03 \\
+    \textit{Phyllaplysia taylori} & 0.36  & 1.75  & 4.77  & 0.83  & 7.31  & 28.34 \\
+    \textit{Photis brevipes} & 0.50  & 1.17  & 3.48  & 1.07  & 5.33  & 33.67 \\
+    Nereid B & 0.18  & 1.05  & 3.37  & 1.20  & 5.16  & 38.83 \\
+    Nematode A & 0.20  & 0.58  & 3.06  & 0.73  & 4.68  & 43.51 \\
+    \textit{Idotea resecata} & 1.18  & 1.26  & 2.91  & 0.70  & 4.46  & 47.97 \\
+    \textit{Tanaidacea} & 0.38  & 0.59  & 2.79  & 0.85  & 4.27  & 52.24 \\
+    Nereid C & 0.53  & 0.79  & 2.78  & 0.90  & 4.26  & 56.50 \\
+    \textit{Aoroides columbidae} & 0.78  & 1.07  & 2.54  & 0.79  & 3.90  & 60.40 \\
+    Tubeworm & 0.19  & 0.69  & 2.29  & 0.68  & 3.50  & 63.90 \\
+    Unidentified Amph 2 & 0.27  & 0.71  & 2.14  & 0.89  & 3.29  & 67.19 \\
+    Nereid D & 0.30  & 0.25  & 1.91  & 0.55  & 2.92  & 70.11 \\
+    \textit{Lacuna spp.} & 0.28  & 0.35  & 1.70  & 0.77  & 2.60  & 72.71 \\
+    \textit{Pycnogonida} & 0.37  & 0.44  & 1.60  & 0.48  & 2.45  & 75.16 \\
+    \textit{Acari} & 0.26  & 0.13  & 1.58  & 0.50  & 2.43  & 77.59 \\
+    \textit{Corophium sp.} & 0.41  & 0.16  & 1.38  & 0.66  & 2.11  & 79.70 \\
+    \textit{Amphithoe sp.} & 0.16  & 0.31  & 1.30  & 0.66  & 2.00  & 81.70 \\
+    Unidentified \textit{Bivalvia} & 0.17  & 0.38  & 1.27  & 0.64  & 1.94  & 83.64 \\
+    \textit{Copepoda} & 0.23  & 0.05  & 1.01  & 0.39  & 1.55  & 85.19 \\
+    \textit{Margarites spp.} & 0.00  & 0.30  & 0.81  & 0.50  & 1.24  & 86.43 \\
+    \textit{Eogammarus confervicolus} & 0.24  & 0.05  & 0.76  & 0.50  & 1.17  & 87.59 \\
+    \textit{Cirripedia:Sessilia} & 0.01  & 0.18  & 0.72  & 0.44  & 1.10  & 88.69 \\
+    Nematode B & 0.00  & 0.22  & 0.71  & 0.37  & 1.08  & 89.77 \\
+    \textit{Lottia pelta} & 0.05  & 0.16  & 0.64  & 0.43  & 0.99  & 90.76 \\ \hline
+          &       &       &       &       &       &  \\
+        \end{longtable}%
+    \end{center}
+
+  \end{landscape}
+  
+  % Table generated by Excel2LaTeX from sheet 'Sheet1'
+\begin{center}
+\begin{table}
+  \caption{PERMANOVA of raw species composition data.}
+    \begin{tabular}{rccccccc}
+    \hline
+    Source &  df   &     SS &      MS & Pseudo-F & P(perm) & Unique perms &  P(MC) \\
+  \hline
+    site  & 4     & 37.893 & 9.4731 & 2.2745 & 0.0148 & 7302  & 0.0028 \\
+    time  & 1     & 16.457 & 16.457 & 33.561 & 0.0001 & 9929  & 0.0001 \\
+    site x time & 4     & 16.66 & 4.165 & 8.4941 & 0.0001 & 9827  & 0.0001 \\
+    Res   & 150   & 73.551 & 0.49034 &       &       &       &  \\
+    Total & 159   & 144.56 &       &       &       &       &  \\
+    \hline
+    \end{tabular}%
+\end{table}%
+\end{center}
+  
+  \begin{figure}
+\label{fig:rawMDS}
+\begin{center}
+\includegraphics[width = 6in]{RawMDS.png}
+\end{center}
+\caption{nMDS of raw species data epifaunal communities across all sites in May and August.}
+\end{figure}
+
+
+
+%% This changes the headings and chapter titles (no numbers for
+%% example).
+\backmatter
+
+%% Indices come here if you have them.
+
+
+\end{document}
+\endinput
+%%
+%% End of file 'Whippo_Thesis.Rnw'
